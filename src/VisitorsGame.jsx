@@ -540,7 +540,11 @@ function useAudioBank(musicVolume, sfxVolume) {
   const banksRef = useRef(null);
   const mutedRef = useRef(false);
 
-  if (!banksRef.current) {
+  const needsBuild = !banksRef.current
+    || Object.values(banksRef.current).length === 0
+    || Object.values(banksRef.current).some(a => !a || !a.src);
+
+  if (needsBuild) {
     const bank = {};
     if (typeof Audio !== "undefined") {
       Object.entries(AUDIO_FILES).forEach(([key, src]) => {
@@ -556,8 +560,11 @@ function useAudioBank(musicVolume, sfxVolume) {
           console.warn(`Failed to create audio for ${key}:`, e);
         }
       });
+    } else {
+      console.warn("[audio] window.Audio is undefined - cannot create audio bank");
     }
     banksRef.current = bank;
+    console.log("[audio] bank built:", Object.keys(bank).length, "tracks, AUDIO_BASE=", AUDIO_BASE, "first src:", bank.bgm?.src);
   }
 
   // Update volumes whenever the sliders change
@@ -572,15 +579,14 @@ function useAudioBank(musicVolume, sfxVolume) {
   }, [musicVolume, sfxVolume]);
 
   const play = useCallback((key, opts = {}) => {
-    if (mutedRef.current) return;
+    if (mutedRef.current) { console.log("[audio] play skipped (muted):", key); return; }
     const a = banksRef.current[key];
-    if (!a) return;
+    if (!a) { console.warn("[audio] play missing bank entry:", key); return; }
     try {
-      // restart from beginning for one-shots
       if (opts.restart !== false && !a.loop) a.currentTime = 0;
       const p = a.play();
-      if (p && p.catch) p.catch(() => {/* autoplay block, ignore */});
-    } catch (e) {/* ignore */}
+      if (p && p.catch) p.catch((err) => { console.warn("[audio] play rejected:", key, err.name); });
+    } catch (e) { console.warn("[audio] play threw:", key, e); }
   }, []);
 
   const stop = useCallback((key) => {
@@ -605,12 +611,18 @@ function useAudioBank(musicVolume, sfxVolume) {
   // Get the underlying HTMLAudioElement for a key (for state inspection)
   const getElement = useCallback((key) => banksRef.current?.[key] || null, []);
 
-  // cleanup on unmount
+  // cleanup on unmount: pause everything. Don't set src="" — that would leave the bank in
+  // a broken state if React (StrictMode in dev) immediately re-mounts the component.
+  // We also clear banksRef so that the next mount's needsBuild check triggers a fresh bank.
   useEffect(() => {
     return () => {
-      Object.values(banksRef.current || {}).forEach(a => {
-        try { a.pause(); a.src = ""; } catch (e) {}
-      });
+      const cur = banksRef.current;
+      if (cur) {
+        Object.values(cur).forEach(a => {
+          try { a.pause(); } catch (e) {}
+        });
+      }
+      banksRef.current = null;
     };
   }, []);
 
@@ -648,29 +660,32 @@ export default function CatPettingGame() {
   // This handles the case where the very first interaction is the mute button (which would
   // otherwise leave BGM silent forever in a single-shot tryPlay design).
   useEffect(() => {
+    console.log("[audio] autoplay effect mounted");
     let bgmStarted = false;
-    const tryStart = () => {
+    const tryStart = (ev) => {
       if (bgmStarted) return;
-      if (muteStateRef.current) return; // muted: skip but DON'T disarm
+      if (muteStateRef.current) { console.log("[audio] tryStart skipped (muted)"); return; }
+      if (ev) console.log("[audio] tryStart fired by", ev.type);
+      else console.log("[audio] tryStart fired initially");
       audio.play("bgm");
-      // Check shortly after if it's actually playing; if so, mark started and disarm
       setTimeout(() => {
         const a = audio.getElement?.("bgm");
+        console.log("[audio] post-play check: paused=", a?.paused, "currentTime=", a?.currentTime, "error=", a?.error);
         if (a && !a.paused && !a.error) {
           bgmStarted = true;
+          console.log("[audio] ✅ bgm confirmed playing, removing listeners");
           window.removeEventListener("pointerdown", tryStart, true);
           window.removeEventListener("keydown", tryStart, true);
           window.removeEventListener("touchstart", tryStart, true);
         }
       }, 200);
     };
-    // initial attempt
     tryStart();
-    // listen on capture phase so we fire before anything that calls stopPropagation
     window.addEventListener("pointerdown", tryStart, true);
     window.addEventListener("keydown", tryStart, true);
     window.addEventListener("touchstart", tryStart, true);
     return () => {
+      console.log("[audio] autoplay effect cleanup");
       window.removeEventListener("pointerdown", tryStart, true);
       window.removeEventListener("keydown", tryStart, true);
       window.removeEventListener("touchstart", tryStart, true);
