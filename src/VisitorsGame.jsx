@@ -13,6 +13,18 @@ const ROOM_OFFSET_Y = 101; // room sits so its floor diamond aligns with the pai
 const PIXEL_SCALE = 2;
 const CAT_SIZE = 14;
 
+// Hand-painted cat sprite filenames (Entry 27). These are the five unique cat
+// appearances in /public/art/. On first mount, they get shuffled and zipped
+// against CAT_PERSONALITIES so each personality (Mochi/Whiskers/Princess/Gremlin/Pudding)
+// gets a stable random sprite for this play session. Re-shuffles on full page reload.
+const CAT_SPRITE_FILES = [
+  "cat1_white.png",
+  "cat2_black.png",
+  "cat3_cow.png",
+  "cat4_pointed.png",
+  "cat5_orange.png",
+];
+
 const CAT_PERSONALITIES = [
   { type: "clingy",    color: "#F4A460", earColor: "#D4956A", eyeColor: "#5D4E37", threshold: 100, gainRate: 1.0,  warningInterval: 0    },
   { type: "normal",    color: "#9E9E9E", earColor: "#757575", eyeColor: "#3A3A3A", threshold: 120, gainRate: 0.7,  warningInterval: 8000 },
@@ -139,36 +151,55 @@ const drawFurniture = (ctx, item) => {
   }
 };
 
-// pixel cat sprite (top view-ish)
-const drawCat = (ctx, x, y, color, earColor, eyeColor) => {
+// Cat sprite renderer. Two modes:
+//   1) If a loaded sprite image is provided, blit it centered horizontally at (x, y),
+//      with the bottom of the image aligned to y+4 (matches the old programmatic
+//      cat's shadow line, so worldToScreen positioning stays correct).
+//   2) If no sprite, fall back to the hand-coded colored-rect cat. This is what
+//      shows briefly before the PNGs load (or permanently if a sprite 404s).
+//
+// `sprite` is an HTMLImageElement or null/undefined.
+// Returns the rendered bounding box so the click hit-tester can use the actual
+// drawn area (more accurate than a fixed box when the artist changes sprite size).
+const drawCat = (ctx, x, y, color, earColor, eyeColor, sprite) => {
   ctx.imageSmoothingEnabled = false;
 
-  // shadow
+  // shadow (drawn under both sprite and fallback paths)
   ctx.fillStyle = "rgba(0,0,0,0.18)";
   ctx.beginPath();
   ctx.ellipse(x, y + 4, 9, 3, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  // body
+  if (sprite && sprite.complete && sprite.naturalWidth > 0) {
+    // Sprite mode: blit the PNG. We center the image horizontally at x and align
+    // its bottom edge to y+4 (just above the shadow ellipse), so the cat appears
+    // to be standing on the shadow regardless of how tall the artist drew it.
+    const w = sprite.naturalWidth;
+    const h = sprite.naturalHeight;
+    const drawX = Math.round(x - w / 2);
+    const drawY = Math.round(y + 4 - h);
+    ctx.drawImage(sprite, drawX, drawY, w, h);
+    return { left: drawX, top: drawY, right: drawX + w, bottom: drawY + h };
+  }
+
+  // Fallback: original programmatic pixel cat (used until sprite loads, or if 404).
   ctx.fillStyle = color;
   ctx.fillRect(x - 6, y - 4, 12, 8);
-  // head
   ctx.fillRect(x - 5, y - 9, 10, 6);
-  // ears
   ctx.fillStyle = color;
   ctx.fillRect(x - 5, y - 11, 3, 3);
   ctx.fillRect(x + 2, y - 11, 3, 3);
   ctx.fillStyle = earColor;
   ctx.fillRect(x - 4, y - 10, 1, 1);
   ctx.fillRect(x + 3, y - 10, 1, 1);
-  // eyes
   ctx.fillStyle = eyeColor;
   ctx.fillRect(x - 3, y - 7, 1, 1);
   ctx.fillRect(x + 2, y - 7, 1, 1);
-  // tail
   ctx.fillStyle = color;
   ctx.fillRect(x + 6, y - 2, 2, 4);
   ctx.fillRect(x + 8, y - 4, 2, 3);
+  // Fallback bounding box approximation (matches the rectangles drawn above).
+  return { left: x - 6, top: y - 11, right: x + 10, bottom: y + 4 };
 };
 
 // Draws a small icon above a cat (heart, sleep z, scratch mark, or "wants pets" bubble)
@@ -510,8 +541,19 @@ function useAudioBank(musicVolume, sfxVolume) {
   return useMemo(() => ({ play, stop, pause, setMuted, getElement }), [play, stop, pause, setMuted, getElement]);
 }
 
-// Asset paths. We load the room background once at mount and reuse the HTMLImageElement.
+// Asset paths. We load images once at mount and reuse the HTMLImageElement(s).
 const BG_IMAGE_SRC = "/art/room_background.png";
+const CAT_SPRITE_BASE = "/art/"; // prepended to each filename in CAT_SPRITE_FILES
+// Custom cursors (Entry 27). Pointing hand = default everywhere; petting hand =
+// shown when the mouse is over a "waiting" cat. CSS cursor: url() syntax includes
+// a hotspot (x, y) — the pixel that "counts" as the click point.
+//   - Pointing hand hotspot: (1, 1)   ← fingertip is near top-left of the image
+//   - Petting hand hotspot: (16, 16)  ← palm center for a 32x32 image
+// If the artist later changes cursor image sizes, update these hotspot coords.
+const CURSOR_POINT_URL = "/art/cursor_pointinghand.png";
+const CURSOR_POINT_HOTSPOT = { x: 1, y: 1 };
+const CURSOR_PET_URL = "/art/cursor_pettinghand.png";
+const CURSOR_PET_HOTSPOT = { x: 16, y: 16 };
 
 // ===== MAIN COMPONENT =====
 export default function CatPettingGame() {
@@ -542,6 +584,36 @@ export default function CatPettingGame() {
     if (img.complete && img.naturalWidth > 0) {
       bgImageRef.current = img;
     }
+  }, []);
+
+  // Cat sprites (Entry 27). On first mount, we shuffle CAT_SPRITE_FILES and assign one
+  // to each personality in CAT_PERSONALITIES. The mapping is keyed by personality.type
+  // and lives in a ref so it stays stable for the whole session — same personality
+  // always shows the same sprite. We also preload each Image so they're ready by the
+  // time cats appear in the room (the renderer falls back to the old colored-rect cat
+  // drawing if a sprite hasn't loaded yet, so nothing breaks if a 404 occurs).
+  const catSpritesRef = useRef({}); // { [personality.type]: HTMLImageElement }
+  // Per-frame map of cat index → actual drawn bounding box {left, top, right, bottom}.
+  // Populated by the render loop on every frame; consumed by pickCatAtScreen for hit-testing.
+  const catHitBoxesRef = useRef({});
+  useEffect(() => {
+    // Fisher-Yates shuffle of the sprite filenames
+    const shuffled = [...CAT_SPRITE_FILES];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    // Pair them with personalities by index. If counts ever drift apart, we wrap.
+    CAT_PERSONALITIES.forEach((p, i) => {
+      const fname = shuffled[i % shuffled.length];
+      const img = new Image();
+      img.src = CAT_SPRITE_BASE + fname;
+      img.onload = () => { catSpritesRef.current[p.type] = img; };
+      img.onerror = () => { /* leave undefined; renderer falls back to drawCat */ };
+      if (img.complete && img.naturalWidth > 0) {
+        catSpritesRef.current[p.type] = img;
+      }
+    });
   }, []);
 
   // ---- AUDIO ----
@@ -920,20 +992,19 @@ export default function CatPettingGame() {
       entities.sort((a, b) => (a.tx + a.ty) - (b.tx + b.ty));
 
       const now = Date.now();
+      // We also record the actual drawn bounding box of each cat sprite so the
+      // hit-tester (used for mouse hover + click) can use real pixel bounds rather
+      // than a fixed-size estimate. The map is keyed by cat index and stashed in
+      // a ref so handlers outside this effect can read it.
+      const newBoxes = {};
       entities.forEach(e => {
         const s = worldToScreen(e.tx, e.ty);
         const c = e.data;
-        drawCat(ctx, s.x, s.y - 4, c.catData.color, c.catData.earColor, c.catData.eyeColor);
-        // Glow ring only for the cat currently under the mouse cursor, AND only
-        // if that cat is "waiting" (interactable). Cursor highlight replaces the
-        // proximity-to-player highlight from the WASD version.
-        if (hoveredCatIdx === e.idx && c.state === "waiting") {
-          ctx.strokeStyle = "rgba(255, 200, 100, 0.7)";
-          ctx.lineWidth = 1.5;
-          ctx.beginPath();
-          ctx.ellipse(s.x, s.y, 14, 9, 0, 0, Math.PI * 2);
-          ctx.stroke();
-        }
+        const sprite = catSpritesRef.current[c.catData.type];
+        const box = drawCat(ctx, s.x, s.y - 4, c.catData.color, c.catData.earColor, c.catData.eyeColor, sprite);
+        if (box) newBoxes[e.idx] = box;
+        // No glow ring in Entry 27 — the custom mouse cursor (pointing → petting hand)
+        // is now the only visual indicator that a cat is interactable.
         // overlay icon based on state
         let iconKind = null;
         if (c.state === "waiting") iconKind = "wants";
@@ -942,6 +1013,7 @@ export default function CatPettingGame() {
         // "arriving", "leaving", "resting" get no icon
         if (iconKind) drawCatIcon(ctx, s.x, s.y - 4, iconKind, now);
       });
+      catHitBoxesRef.current = newBoxes;
 
       // Door event overlay: a hand reaches in briefly when the door opens
       if (doorEvent) {
@@ -953,7 +1025,7 @@ export default function CatPettingGame() {
     };
     raf = requestAnimationFrame(render);
     return () => cancelAnimationFrame(raf);
-  }, [cats, hoveredCatIdx, doorEvent]);
+  }, [cats, doorEvent]);
 
   // ---- PETTING LOGIC ----
   const clearTimers = useCallback(() => {
@@ -1070,19 +1142,19 @@ export default function CatPettingGame() {
     const mx = ((event.clientX - rect.left) / rect.width) * ROOM_W;
     const my = ((event.clientY - rect.top) / rect.height) * ROOM_H;
 
-    // Walk all cats, pick the foreground-most one whose sprite contains (mx, my).
-    // Cat sprite is drawn at worldToScreen(c.x, c.y) with vertical offset -4 (see render
-    // loop). Its visual bounding box covers roughly x in [-9, +12], y in [-18, +4] relative
-    // to the world-screen point. We use a slightly forgiving box for easier clicking.
+    // Walk all cats, pick the foreground-most one whose sprite bounding box contains
+    // (mx, my). Hit boxes come from the renderer (catHitBoxesRef) which stores the
+    // actual drawn rectangle each frame — so they automatically match whatever sprite
+    // size the artist used, with no manual tuning needed.
+    // Foreground-most = largest tx+ty in iso projection (i.e. cat drawn most "in front").
+    const boxes = catHitBoxesRef.current;
     let best = null;
-    let bestDepth = -Infinity; // larger (tx+ty) = more foreground
+    let bestDepth = -Infinity;
     cats.forEach((c, i) => {
       if (c.state !== "waiting") return; // only waiting cats are interactable
-      const s = worldToScreen(c.x, c.y);
-      const inside =
-        mx >= s.x - 10 && mx <= s.x + 12 &&
-        my >= s.y - 18 && my <= s.y + 5;
-      if (!inside) return;
+      const box = boxes[i];
+      if (!box) return; // sprite hasn't been drawn this frame yet
+      if (mx < box.left || mx > box.right || my < box.top || my > box.bottom) return;
       const depth = c.x + c.y;
       if (depth > bestDepth) {
         bestDepth = depth;
@@ -1288,7 +1360,11 @@ export default function CatPettingGame() {
 
         {/* canvas room - fills the viewport. Pixel-art rendering set globally in index.html.
             Click-to-pet handlers (Entry 26): mouse move highlights the cat under cursor,
-            click on a "waiting" cat opens the petting popup. */}
+            click on a "waiting" cat opens the petting popup.
+            Custom cursors (Entry 27): the global pointing-hand cursor (from index.html)
+            applies by default everywhere; on this canvas, when the mouse is over an
+            interactable cat we override with the petting-hand cursor. The "16 16"
+            after the URL is the hotspot (palm center for a 32x32 image). */}
         <canvas
           ref={canvasRef}
           width={ROOM_W} height={ROOM_H}
@@ -1298,7 +1374,9 @@ export default function CatPettingGame() {
           style={{
             display: "block",
             width: "100%", height: "100%",
-            cursor: hoveredCatIdx !== null ? "pointer" : "default",
+            cursor: hoveredCatIdx !== null
+              ? `url('${CURSOR_PET_URL}') ${CURSOR_PET_HOTSPOT.x} ${CURSOR_PET_HOTSPOT.y}, auto`
+              : `url('${CURSOR_POINT_URL}') ${CURSOR_POINT_HOTSPOT.x} ${CURSOR_POINT_HOTSPOT.y}, auto`,
           }}
         />
 
