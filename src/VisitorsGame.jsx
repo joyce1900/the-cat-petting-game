@@ -1,15 +1,15 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 
 // ===== CONFIG =====
-// Whole game renders at fixed 320x200 internal resolution (DOS-era 16:10),
-// scaled up to fit the viewport. Room and pet popup live inside this 320x200 area.
+// Whole game renders at fixed 320x240 internal resolution (classic VGA 4:3),
+// scaled up to fit the viewport. Room and pet popup live inside this 320x240 area.
 const ROOM_W = 320;
-const ROOM_H = 200;
-const TILE_W = 28; // isometric tile width
-const TILE_H = 14; // isometric tile height
+const ROOM_H = 240;
+const TILE_W = 34; // isometric tile width (tuned to match the hand-painted room_background.png floor diamond)
+const TILE_H = 17; // isometric tile height
 const ROOM_TILES_X = 7;
 const ROOM_TILES_Y = 7;
-const ROOM_OFFSET_Y = 75; // room sits in the lower-middle of the canvas
+const ROOM_OFFSET_Y = 101; // room sits so its floor diamond aligns with the painted floor in room_background.png
 const PIXEL_SCALE = 2;
 const MOVE_SPEED = 0.55;
 const PLAYER_SIZE = 12;
@@ -52,102 +52,19 @@ const worldToScreen = (wx, wy) => {
 
 // ===== PIXEL ART RENDERING (canvas) =====
 
-// draw the isometric room background to a canvas
-const drawRoom = (ctx) => {
+// draw the room background by blitting the hand-painted 320x240 image.
+// The painted PNG includes floor, walls, window, door, and built-in furniture
+// (cat beds, scratch post, plants, painting on wall). All previous programmatic
+// floor/wall/window/door/painting drawing was removed in Entry 25.
+const drawRoom = (ctx, bgImage) => {
   ctx.imageSmoothingEnabled = false;
-  ctx.clearRect(0, 0, ROOM_W, ROOM_H);
-
-  // background tint - fixed warm cream
-  ctx.fillStyle = "rgb(250, 235, 220)";
-  ctx.fillRect(0, 0, ROOM_W, ROOM_H);
-
-  // floor tiles
-  for (let ty = 0; ty < ROOM_TILES_Y; ty++) {
-    for (let tx = 0; tx < ROOM_TILES_X; tx++) {
-      const top = tileToScreen(tx, ty);
-      const right = tileToScreen(tx + 1, ty);
-      const bottom = tileToScreen(tx + 1, ty + 1);
-      const left = tileToScreen(tx, ty + 1);
-
-      // alternating wood plank colors
-      const isLight = (tx + ty) % 2 === 0;
-      ctx.fillStyle = isLight ? "rgb(204, 169, 134)" : "rgb(189, 154, 119)";
-
-      ctx.beginPath();
-      ctx.moveTo(top.x, top.y);
-      ctx.lineTo(right.x, right.y);
-      ctx.lineTo(bottom.x, bottom.y);
-      ctx.lineTo(left.x, left.y);
-      ctx.closePath();
-      ctx.fill();
-
-      ctx.strokeStyle = "rgba(120, 90, 60, 0.15)";
-      ctx.lineWidth = 1;
-      ctx.stroke();
-    }
+  if (bgImage && bgImage.complete && bgImage.naturalWidth > 0) {
+    ctx.drawImage(bgImage, 0, 0, ROOM_W, ROOM_H);
+  } else {
+    // fallback while image loads — solid cream so we don't flash black
+    ctx.fillStyle = "rgb(250, 235, 220)";
+    ctx.fillRect(0, 0, ROOM_W, ROOM_H);
   }
-
-  // back walls
-  const wallTopColor = "rgb(239, 214, 199)";
-  const wallSideColor = "rgb(214, 184, 169)";
-  const wallH = 60;
-
-  // left wall (at tx = 0)
-  ctx.fillStyle = wallTopColor;
-  ctx.beginPath();
-  const lw1 = tileToScreen(0, 0);
-  const lw2 = tileToScreen(0, ROOM_TILES_Y);
-  ctx.moveTo(lw1.x, lw1.y);
-  ctx.lineTo(lw1.x, lw1.y - wallH);
-  ctx.lineTo(lw2.x, lw2.y - wallH);
-  ctx.lineTo(lw2.x, lw2.y);
-  ctx.closePath();
-  ctx.fill();
-
-  // right wall (at ty = 0)
-  ctx.fillStyle = wallSideColor;
-  ctx.beginPath();
-  const rw1 = tileToScreen(0, 0);
-  const rw2 = tileToScreen(ROOM_TILES_X, 0);
-  ctx.moveTo(rw1.x, rw1.y);
-  ctx.lineTo(rw1.x, rw1.y - wallH);
-  ctx.lineTo(rw2.x, rw2.y - wallH);
-  ctx.lineTo(rw2.x, rw2.y);
-  ctx.closePath();
-  ctx.fill();
-
-  // window on left wall
-  const winY = lw1.y - 44;
-  const winX1 = (lw1.x + lw2.x) / 2 - 22;
-  ctx.fillStyle = "#8D6E63";
-  ctx.fillRect(winX1 - 1, winY - 1, 24, 18);
-  ctx.fillStyle = "rgb(200, 215, 210)";
-  ctx.fillRect(winX1, winY, 22, 16);
-  ctx.fillStyle = "#8D6E63";
-  ctx.fillRect(winX1 + 10, winY, 2, 16);
-  ctx.fillRect(winX1, winY + 7, 22, 2);
-
-  // door on right wall (entrance for cats and owners)
-  // positioned near the corner of the right wall at the back
-  const doorAnchor = tileToScreen(ROOM_TILES_X * 0.85, 0);
-  ctx.fillStyle = "#5D4037";
-  ctx.fillRect(doorAnchor.x - 7, doorAnchor.y - 40, 14, 40);
-  ctx.fillStyle = "#8B5A3C";
-  ctx.fillRect(doorAnchor.x - 6, doorAnchor.y - 38, 12, 38);
-  // doorknob
-  ctx.fillStyle = "#FFD54F";
-  ctx.fillRect(doorAnchor.x + 3, doorAnchor.y - 20, 1, 2);
-
-  // painting on right wall (moved slightly to make room for door)
-  const pW = tileToScreen(ROOM_TILES_X * 0.35, 0);
-  ctx.fillStyle = "#5D4037";
-  ctx.fillRect(pW.x - 8, pW.y - 46, 16, 12);
-  ctx.fillStyle = "#FFE0B2";
-  ctx.fillRect(pW.x - 7, pW.y - 45, 14, 10);
-  ctx.fillStyle = "#5D4037";
-  ctx.fillRect(pW.x - 3, pW.y - 41, 6, 4);
-  ctx.fillRect(pW.x - 3, pW.y - 42, 1, 1);
-  ctx.fillRect(pW.x + 2, pW.y - 42, 1, 1);
 };
 
 // draw a furniture sprite at a tile position (occupies 1+ tiles)
@@ -557,14 +474,11 @@ function useAudioBank(musicVolume, sfxVolume) {
           if (key === "bgm" || key === "purr" || key === "piano") a.loop = true;
           bank[key] = a;
         } catch (e) {
-          console.warn(`Failed to create audio for ${key}:`, e);
+          // Audio constructor failed for this clip; skip silently.
         }
       });
-    } else {
-      console.warn("[audio] window.Audio is undefined - cannot create audio bank");
     }
     banksRef.current = bank;
-    console.log("[audio] bank built:", Object.keys(bank).length, "tracks, AUDIO_BASE=", AUDIO_BASE, "first src:", bank.bgm?.src);
   }
 
   // Update volumes whenever the sliders change
@@ -579,16 +493,16 @@ function useAudioBank(musicVolume, sfxVolume) {
   }, [musicVolume, sfxVolume]);
 
   const play = useCallback((key, opts = {}) => {
-    if (mutedRef.current) { console.log("[audio] play skipped (muted):", key); return; }
+    if (mutedRef.current) return;
     const bank = banksRef.current;
-    if (!bank) { console.warn("[audio] play called but bank is null:", key); return; }
+    if (!bank) return;
     const a = bank[key];
-    if (!a) { console.warn("[audio] play missing bank entry:", key); return; }
+    if (!a) return;
     try {
       if (opts.restart !== false && !a.loop) a.currentTime = 0;
       const p = a.play();
-      if (p && p.catch) p.catch((err) => { console.warn("[audio] play rejected:", key, err.name); });
-    } catch (e) { console.warn("[audio] play threw:", key, e); }
+      if (p && p.catch) p.catch(() => {/* autoplay block or other, ignore */});
+    } catch (e) {/* ignore */}
   }, []);
 
   const stop = useCallback((key) => {
@@ -636,6 +550,9 @@ function useAudioBank(musicVolume, sfxVolume) {
   return useMemo(() => ({ play, stop, pause, setMuted, getElement }), [play, stop, pause, setMuted, getElement]);
 }
 
+// Asset paths. We load the room background once at mount and reuse the HTMLImageElement.
+const BG_IMAGE_SRC = "/art/room_background.png";
+
 // ===== MAIN COMPONENT =====
 export default function CatPettingGame() {
   const [phase, setPhase] = useState("room"); // "room" or "petting"
@@ -646,6 +563,25 @@ export default function CatPettingGame() {
   const [nearbyCatIdx, setNearbyCatIdx] = useState(null);
   const [doorEvent, setDoorEvent] = useState(null); // null or { action: "dropoff"|"pickup", payload, startedAt, durationMs }
   const [muted, setMutedState] = useState(false);
+
+  // ---- ART ASSETS ----
+  // Hand-painted room background. Loaded once and reused every frame in the canvas render loop.
+  // We store the HTMLImageElement in a ref (no state churn) and use a small state flag only to
+  // trigger a re-render when loading completes (so the canvas effect can pick up the loaded image).
+  const bgImageRef = useRef(null);
+  const [bgLoaded, setBgLoaded] = useState(false);
+  useEffect(() => {
+    const img = new Image();
+    img.src = BG_IMAGE_SRC;
+    img.onload = () => { bgImageRef.current = img; setBgLoaded(true); };
+    img.onerror = () => { /* image will simply not draw; fallback cream background in drawRoom */ };
+    // If the image was already cached and decoded synchronously, onload may have fired
+    // before we attached it. Check completeness as a safety net.
+    if (img.complete && img.naturalWidth > 0) {
+      bgImageRef.current = img;
+      setBgLoaded(true);
+    }
+  }, []);
 
   // ---- AUDIO ----
   // Volumes are fixed - no in-game adjustment. Tune the constants in useAudioBank's BASE_VOLUMES if needed.
@@ -666,20 +602,16 @@ export default function CatPettingGame() {
   // This handles the case where the very first interaction is the mute button (which would
   // otherwise leave BGM silent forever in a single-shot tryPlay design).
   useEffect(() => {
-    console.log("[audio] autoplay effect mounted");
     let bgmStarted = false;
-    const tryStart = (ev) => {
+    const tryStart = () => {
       if (bgmStarted) return;
-      if (muteStateRef.current) { console.log("[audio] tryStart skipped (muted)"); return; }
-      if (ev) console.log("[audio] tryStart fired by", ev.type);
-      else console.log("[audio] tryStart fired initially");
+      if (muteStateRef.current) return; // muted: skip but DON'T disarm
       audio.play("bgm");
+      // Check shortly after if it's actually playing; if so, mark started and disarm
       setTimeout(() => {
         const a = audio.getElement?.("bgm");
-        console.log("[audio] post-play check: paused=", a?.paused, "currentTime=", a?.currentTime, "error=", a?.error);
         if (a && !a.paused && !a.error) {
           bgmStarted = true;
-          console.log("[audio] ✅ bgm confirmed playing, removing listeners");
           window.removeEventListener("pointerdown", tryStart, true);
           window.removeEventListener("keydown", tryStart, true);
           window.removeEventListener("touchstart", tryStart, true);
@@ -687,11 +619,11 @@ export default function CatPettingGame() {
       }, 200);
     };
     tryStart();
+    // Listen on capture phase so we fire before any handler that calls stopPropagation
     window.addEventListener("pointerdown", tryStart, true);
     window.addEventListener("keydown", tryStart, true);
     window.addEventListener("touchstart", tryStart, true);
     return () => {
-      console.log("[audio] autoplay effect cleanup");
       window.removeEventListener("pointerdown", tryStart, true);
       window.removeEventListener("keydown", tryStart, true);
       window.removeEventListener("touchstart", tryStart, true);
@@ -1085,11 +1017,12 @@ export default function CatPettingGame() {
 
     let raf;
     const render = () => {
-      drawRoom(ctx);
+      drawRoom(ctx, bgImageRef.current);
 
-      // furniture sorted by depth (back first)
-      const sortedFurn = [...FURNITURE].sort((a, b) => (a.tx + a.ty) - (b.tx + b.ty));
-      sortedFurn.forEach(f => drawFurniture(ctx, f));
+      // Furniture is now part of the hand-painted room_background.png — no programmatic
+      // furniture drawing. The FURNITURE constant is still consulted by pickRandomSpot
+      // and canMoveTo for collision, so cats avoid walking through painted furniture.
+      // (Position re-tuning to match the painted layout is a separate pass.)
 
       // collect entities (cats + player) and sort by depth
       const entities = [];
@@ -1317,12 +1250,12 @@ export default function CatPettingGame() {
   }, [lastMousePos, isPetting]);
 
   // ===== RENDER =====
-  // Whole game is rendered inside a fixed 320x200 logical viewport, scaled to fit.
-  // We use CSS to size the viewport to fit the screen while preserving 320:200 aspect.
+  // Whole game is rendered inside a fixed 320x240 logical viewport, scaled to fit.
+  // We use CSS to size the viewport to fit the screen while preserving 320:240 (4:3) aspect.
   // Coordinates inside this viewport are 1px = 1 game pixel.
 
   const VIEW_W = 320;
-  const VIEW_H = 200;
+  const VIEW_H = 240;
 
   const outerWrapStyle = {
     width: "100%", height: "100%", minHeight: 480,
@@ -1333,11 +1266,11 @@ export default function CatPettingGame() {
   };
 
   // The fixed viewport that holds all game UI. Size on screen = min(width-fit, height-fit)
-  // preserving the 320:200 (8:5) aspect.
+  // preserving the 320:240 (4:3) aspect ratio. 320/240 = 1.3333..., 240/320 = 0.75.
   const viewportStyle = {
     position: "relative",
-    width: "min(98vw, calc((100vh - 16px) * 1.6))",
-    height: "min(61.25vw, calc(100vh - 16px))",
+    width: "min(98vw, calc((100vh - 16px) * (4 / 3)))",
+    height: "min(73.5vw, calc(100vh - 16px))",
     background: "linear-gradient(180deg, rgb(250,240,225) 0%, rgb(252,232,215) 100%)",
     border: "2px solid #5D4037",
     overflow: "hidden",

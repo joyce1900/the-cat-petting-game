@@ -1,6 +1,6 @@
 # The Cat Petting Game
 
-A continuous, no-goals game about petting cats. Cats arrive at the room from time to time. You walk over to one and pet it. After a while, an owner comes and takes one home. Another one shows up later.
+A continuous, no-goals game about petting cats. Cats wander in and out of a room. When a cat wants attention, a little paw bubble appears above its head. Walk over, pet it gently, and watch for warning signs — if you keep going past them, the cat will hiss and jump away. After a while, an owner reaches in through the door to take one home, and another cat eventually arrives. The room is never empty for long.
 
 By Jiayi Yang · GAME 714 · SCAD
 
@@ -9,18 +9,17 @@ By Jiayi Yang · GAME 714 · SCAD
 ## Controls
 
 - **WASD** — walk around the room
-- **E** — pet the nearest cat (you have to be close — a gold ring appears around interactable cats)
-- **Mouse** — gently move over the cat in the popup to pet it
-- **ESC** or the **×** button — close the petting popup
-- **♪ button** (top-right) — open audio settings (mute, music volume, effects volume)
+- **E** — pet the nearest cat (you must be close enough — a gold ring marks an interactable cat)
+- **Mouse** — gently move the cursor over the cat in the popup to pet it
+- **♪ button** (top-right) — toggle mute (a red slash appears through the icon when muted)
 
-The game has no goal, no score, no save state. Close the browser when you're done.
+No menus, no save state, no end. Close the browser when you're done.
 
 ---
 
-## How to run locally
+## Running locally
 
-You'll need [Node.js](https://nodejs.org/) installed (version 18 or newer).
+You'll need [Node.js](https://nodejs.org/) (version 18 or newer).
 
 ```bash
 npm install
@@ -35,24 +34,24 @@ To build a production version:
 npm run build
 ```
 
-The built site will be in the `dist/` folder.
+The built site lives in the `dist/` folder.
 
 ---
 
-## How to deploy to a public URL
+## Deploying to a public URL
 
-### Option 1: Vercel via GitHub (recommended)
+### Vercel via GitHub (recommended)
 
 1. Push the project to a GitHub repository
 2. Sign up at https://vercel.com (free)
 3. Click "Add New" → "Project" → "Continue with GitHub"
 4. Authorize Vercel, then select the repo
-5. Vercel auto-detects Vite — just click "Deploy"
+5. Vercel auto-detects Vite — click "Deploy"
 6. You get a public URL like `https://your-game.vercel.app`
 
 Future updates: every push to GitHub triggers a re-deploy.
 
-### Option 2: Netlify drag-drop
+### Netlify drag-drop
 
 1. Run `npm run build` locally
 2. Go to https://app.netlify.com/drop
@@ -78,5 +77,6 @@ visitors-game/
 
 ## Credits
 
-- Code & design: Jiayi Yang, with assistance from Claude (Anthropic)
-- Audio: Pixabay
+- Code & design: Jiayi Yang, with implementation assistance from Claude (Anthropic). See `AI_WORKLOG_Visitors.md` for the full development log.
+- Audio: all sound effects and background music sourced from [Pixabay](https://pixabay.com/sound-effects/) under the Pixabay Content License (free for commercial and non-commercial use, no attribution required, but credited here for transparency). Files used: `background_music.mp3`, `cat_purr.mp3`, `cat_meow.mp3`, `cat_hiss.mp3`, `chime.mp3`, `soft_piano.mp3`, `mouse_click.mp3`.
+- Pixel art (placeholder): generated programmatically via canvas drawing primitives in `VisitorsGame.jsx`. To be replaced with hand-drawn art assets by Jiayi Yang.
