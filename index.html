@@ -18,6 +18,15 @@
         image-rendering: crisp-edges;        /* Safari, fallback */
         -ms-interpolation-mode: nearest-neighbor; /* old IE */
       }
+
+      /* Custom mouse cursor — pointing-hand by default everywhere in the game.
+         The "1 1" pair is the cursor hotspot in pixels (top-left = fingertip).
+         The "auto" at the end is a fallback in case the PNG fails to load.
+         When the cursor is over an interactable cat, an inline style on the
+         canvas overrides this with the petting-hand cursor. */
+      html, body, button, canvas, * {
+        cursor: url('/art/cursor_pointinghand.png') 1 1, auto;
+      }
     </style>
   </head>
   <body>
