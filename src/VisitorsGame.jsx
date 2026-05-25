@@ -11,10 +11,7 @@ const ROOM_TILES_X = 7;
 const ROOM_TILES_Y = 7;
 const ROOM_OFFSET_Y = 101; // room sits so its floor diamond aligns with the painted floor in room_background.png
 const PIXEL_SCALE = 2;
-const MOVE_SPEED = 0.55;
-const PLAYER_SIZE = 12;
 const CAT_SIZE = 14;
-const INTERACT_DIST = 26;
 
 const CAT_PERSONALITIES = [
   { type: "clingy",    color: "#F4A460", earColor: "#D4956A", eyeColor: "#5D4E37", threshold: 100, gainRate: 1.0,  warningInterval: 0    },
@@ -33,7 +30,7 @@ const REST_DURATION_MAX = 60000; // ...and at most this long
 const PICKUP_CHANCE_INTERVAL = 35000; // every ~35s a satisfied cat may be picked up
 const DOOR_COOLDOWN_MS = 6000; // minimum time between door events so they don't overlap
 const DOOR_EVENT_MS = 2200; // duration of a door-open animation (hand reaches in)
-const CAT_WALK_SPEED = 0.7; // tiles per second when a cat wanders or walks to/from the door
+const CAT_WALK_SPEED = 0.55; // tiles per second when a cat wanders or walks to/from the door (lowered from 0.7 in Entry 26 for a calmer, more idle feel)
 
 // ===== ISOMETRIC HELPERS =====
 // convert tile coords to screen pixel coords
@@ -235,44 +232,7 @@ const drawCatIcon = (ctx, x, y, kind, time) => {
   }
 };
 
-// pixel player sprite
-const drawPlayer = (ctx, x, y, facing) => {
-  ctx.imageSmoothingEnabled = false;
-  // shadow
-  ctx.fillStyle = "rgba(0,0,0,0.2)";
-  ctx.beginPath();
-  ctx.ellipse(x, y + 6, 9, 3, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  // body (apron)
-  ctx.fillStyle = "#D4805A";
-  ctx.fillRect(x - 5, y - 5, 11, 11);
-  // pocket
-  ctx.fillStyle = "#A85A35";
-  ctx.fillRect(x - 3, y, 6, 3);
-
-  // head
-  ctx.fillStyle = "#FFCCBC";
-  ctx.fillRect(x - 4, y - 14, 9, 9);
-  // hair
-  ctx.fillStyle = "#3E2723";
-  ctx.fillRect(x - 4, y - 15, 9, 3);
-  ctx.fillRect(x - 5, y - 12, 1, 4);
-  ctx.fillRect(x + 5, y - 12, 1, 4);
-
-  // eyes
-  ctx.fillStyle = "#3E2723";
-  if (facing === "left") {
-    ctx.fillRect(x - 3, y - 9, 1, 1);
-    ctx.fillRect(x, y - 9, 1, 1);
-  } else if (facing === "right") {
-    ctx.fillRect(x - 1, y - 9, 1, 1);
-    ctx.fillRect(x + 2, y - 9, 1, 1);
-  } else {
-    ctx.fillRect(x - 2, y - 9, 1, 1);
-    ctx.fillRect(x + 1, y - 9, 1, 1);
-  }
-};
+// (drawPlayer removed in Entry 26 — the game is click-driven, no player avatar.)
 
 // Door hand animation - a hand emerges from the doorway briefly when the door opens.
 // t is normalized time from 0 (door starts opening) to 1 (event complete).
@@ -556,30 +516,31 @@ const BG_IMAGE_SRC = "/art/room_background.png";
 // ===== MAIN COMPONENT =====
 export default function CatPettingGame() {
   const [phase, setPhase] = useState("room"); // "room" or "petting"
-  const [playerWorldPos, setPlayerWorldPos] = useState({ x: 3.5, y: 3.5 });
-  const [playerFacing, setPlayerFacing] = useState("down");
   const [cats, setCats] = useState([]); // persistent list: [{ id, catData, x, y, targetX, targetY, wanderUntil, state, restUntil, becameRestingAt }]
   const [activeCatIdx, setActiveCatIdx] = useState(null);
-  const [nearbyCatIdx, setNearbyCatIdx] = useState(null);
+  // Index of the cat the mouse is currently hovering over (drawn with a highlight ring).
+  // null when no cat is under the cursor. Replaces the proximity-based nearbyCatIdx from
+  // the WASD-player version: now that the game is click-driven (Entry 26), highlight is
+  // tied to mouse position, not a moving avatar.
+  const [hoveredCatIdx, setHoveredCatIdx] = useState(null);
   const [doorEvent, setDoorEvent] = useState(null); // null or { action: "dropoff"|"pickup", payload, startedAt, durationMs }
   const [muted, setMutedState] = useState(false);
 
   // ---- ART ASSETS ----
-  // Hand-painted room background. Loaded once and reused every frame in the canvas render loop.
-  // We store the HTMLImageElement in a ref (no state churn) and use a small state flag only to
-  // trigger a re-render when loading completes (so the canvas effect can pick up the loaded image).
+  // Hand-painted room background. Loaded once at mount; the canvas render loop
+  // (a continuous requestAnimationFrame) reads bgImageRef.current every frame,
+  // so the image starts being drawn naturally on the first frame after it loads
+  // — no React state / re-render needed.
   const bgImageRef = useRef(null);
-  const [bgLoaded, setBgLoaded] = useState(false);
   useEffect(() => {
     const img = new Image();
     img.src = BG_IMAGE_SRC;
-    img.onload = () => { bgImageRef.current = img; setBgLoaded(true); };
+    img.onload = () => { bgImageRef.current = img; };
     img.onerror = () => { /* image will simply not draw; fallback cream background in drawRoom */ };
     // If the image was already cached and decoded synchronously, onload may have fired
     // before we attached it. Check completeness as a safety net.
     if (img.complete && img.naturalWidth > 0) {
       bgImageRef.current = img;
-      setBgLoaded(true);
     }
   }, []);
 
@@ -630,11 +591,7 @@ export default function CatPettingGame() {
     };
   }, [audio]);
 
-  const keysRef = useRef({});
-  const animFrameRef = useRef(null);
   const canvasRef = useRef(null);
-  const playerPosRef = useRef({ x: 3.5, y: 3.5 });
-  const nearbyCatIdxRef = useRef(null);
 
   // petting state
   const [happiness, setHappiness] = useState(0);
@@ -654,22 +611,6 @@ export default function CatPettingGame() {
   const warningActiveRef = useRef(false);
 
   const activeCat = activeCatIdx !== null ? cats[activeCatIdx]?.catData : null;
-
-  // ---- COLLISION ----
-  const canMoveTo = useCallback((wx, wy) => {
-    // wall margins
-    const margin = 0.3;
-    if (wx < margin || wx > ROOM_TILES_X - margin || wy < margin || wy > ROOM_TILES_Y - margin) return false;
-    // furniture (rectangular AABB)
-    const playerR = 0.25; // player's collision radius in tiles
-    for (const f of FURNITURE) {
-      if (!f.blocking) continue;
-      const hx = (f.blockHalfX || 0.4) + playerR;
-      const hy = (f.blockHalfY || 0.4) + playerR;
-      if (Math.abs(wx - f.tx) < hx && Math.abs(wy - f.ty) < hy) return false;
-    }
-    return true;
-  }, []);
 
   // ---- DAY START ----
   // Build cat schedule deterministically:
@@ -897,12 +838,13 @@ export default function CatPettingGame() {
           // Handle state transitions when target reached
           if (arrivedAtTarget) {
             if (c.state === "arriving") {
-              // Switched to waiting
+              // Switched to waiting. Long initial pause so freshly-arrived cats don't
+              // immediately wander off — gives the player time to notice + approach.
               anyChanged = true;
               return {
                 ...c, x: newX, y: newY,
                 state: "waiting",
-                wanderUntil: now + 3000 + Math.random() * 5000,
+                wanderUntil: now + 8000 + Math.random() * 7000,
               };
             }
             if (c.state === "leaving") {
@@ -920,9 +862,11 @@ export default function CatPettingGame() {
               // Pick a new target nearby OR a new random spot
               const newTarget = pickRandomSpot();
               anyChanged = true;
+              // Idle times tuned in Entry 26 to make the room feel calmer:
+              // resting cats are much more sedentary; waiting cats also pause longer.
               const idleMs = c.state === "resting"
-                ? 6000 + Math.random() * 8000  // resting cats wander less
-                : 3000 + Math.random() * 5000;
+                ? 12000 + Math.random() * 18000  // resting cats wander much less (12-30s)
+                : 8000 + Math.random() * 12000;  // waiting cats pause 8-20s between strolls
               return {
                 ...c, x: newX, y: newY,
                 targetX: newTarget.x, targetY: newTarget.y,
@@ -941,71 +885,17 @@ export default function CatPettingGame() {
     return () => clearInterval(interval);
   }, [activeCatIdx, pickRandomSpot, triggerDoorEvent]);
 
-  // ---- WASD MOVEMENT ----
-  useEffect(() => {
-    if (phase !== "room") return;
-
-    const onKeyDown = (e) => {
-      const k = e.key.toLowerCase();
-      if (["w", "a", "s", "d"].includes(k)) { keysRef.current[k] = true; e.preventDefault(); }
-      if (k === "e" && nearbyCatIdxRef.current !== null) startPetting(nearbyCatIdxRef.current);
-    };
-    const onKeyUp = (e) => { keysRef.current[e.key.toLowerCase()] = false; };
-    window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("keyup", onKeyUp);
-
-    const loop = () => {
-      const k = keysRef.current;
-      let dx = 0, dy = 0;
-      if (k.w) dy -= MOVE_SPEED * 0.05;
-      if (k.s) dy += MOVE_SPEED * 0.05;
-      if (k.a) dx -= MOVE_SPEED * 0.05;
-      if (k.d) dx += MOVE_SPEED * 0.05;
-      if (dx && dy) { dx *= 0.707; dy *= 0.707; }
-
-      if (dx || dy) {
-        const cur = playerPosRef.current;
-        let nx = cur.x + dx;
-        let ny = cur.y + dy;
-        if (canMoveTo(nx, cur.y)) cur.x = nx;
-        if (canMoveTo(cur.x, ny)) cur.y = ny;
-        playerPosRef.current = { ...cur };
-        setPlayerWorldPos({ ...cur });
-
-        if (Math.abs(dx) > Math.abs(dy)) setPlayerFacing(dx > 0 ? "right" : "left");
-        else setPlayerFacing(dy > 0 ? "down" : "up");
-      }
-
-      animFrameRef.current = requestAnimationFrame(loop);
-    };
-    animFrameRef.current = requestAnimationFrame(loop);
-
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("keyup", onKeyUp);
-      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
-      keysRef.current = {};
-    };
-  }, [phase, canMoveTo]);
-
-  // ---- DETECT NEARBY CAT ----
-  useEffect(() => {
-    if (phase !== "room") { setNearbyCatIdx(null); nearbyCatIdxRef.current = null; return; }
-    let closest = null;
-    let closestDist = Infinity;
-    const playerScreen = worldToScreen(playerWorldPos.x, playerWorldPos.y);
-    cats.forEach((c, i) => {
-      if (c.state !== "waiting") return;
-      const catScreen = worldToScreen(c.x, c.y);
-      const dist = Math.sqrt((playerScreen.x - catScreen.x) ** 2 + (playerScreen.y - catScreen.y) ** 2);
-      if (dist < INTERACT_DIST && dist < closestDist) {
-        closest = i;
-        closestDist = dist;
-      }
-    });
-    setNearbyCatIdx(closest);
-    nearbyCatIdxRef.current = closest;
-  }, [playerWorldPos, phase, cats]);
+  // ---- CLICK-TO-PET ----
+  // The game is click-driven (Entry 26): no player avatar, no WASD movement.
+  // Mouse position on the canvas is mapped to world coords, and the cat closest
+  // to the cursor in the "front" sense (largest screen-y; in iso projection that
+  // means the cat drawn most in the foreground) is the one that gets the hover
+  // ring and responds to clicks.
+  //
+  // The actual handlers are below — `pickCatAtScreen` does the hit-test,
+  // `onCanvasMouseMove` updates hoveredCatIdx, `onCanvasClick` starts petting.
+  // They are defined later (after startPetting / pickRandomSpot are in scope)
+  // and bound to the <canvas> element in the JSX.
 
   // ---- DRAW CANVAS ----
   // Continuous mode: phase is "room" almost always (or "petting" when popup is open;
@@ -1021,44 +911,36 @@ export default function CatPettingGame() {
 
       // Furniture is now part of the hand-painted room_background.png — no programmatic
       // furniture drawing. The FURNITURE constant is still consulted by pickRandomSpot
-      // and canMoveTo for collision, so cats avoid walking through painted furniture.
+      // for collision, so cats avoid walking through painted furniture.
       // (Position re-tuning to match the painted layout is a separate pass.)
 
-      // collect entities (cats + player) and sort by depth
-      const entities = [];
-      cats.forEach((c, i) => {
-        entities.push({ type: "cat", tx: c.x, ty: c.y, data: c, idx: i });
-      });
-      entities.push({
-        type: "player",
-        tx: playerPosRef.current.x, ty: playerPosRef.current.y,
-      });
+      // Collect cat entities and sort by depth (back-to-front).
+      // No player entity in Entry 26 — the game is click-driven.
+      const entities = cats.map((c, i) => ({ tx: c.x, ty: c.y, data: c, idx: i }));
       entities.sort((a, b) => (a.tx + a.ty) - (b.tx + b.ty));
 
       const now = Date.now();
       entities.forEach(e => {
         const s = worldToScreen(e.tx, e.ty);
-        if (e.type === "cat") {
-          const c = e.data;
-          drawCat(ctx, s.x, s.y - 4, c.catData.color, c.catData.earColor, c.catData.eyeColor);
-          // glow ring only for waiting cats (interactable)
-          if (nearbyCatIdx === e.idx && c.state === "waiting") {
-            ctx.strokeStyle = "rgba(255, 200, 100, 0.7)";
-            ctx.lineWidth = 1.5;
-            ctx.beginPath();
-            ctx.ellipse(s.x, s.y, 14, 9, 0, 0, Math.PI * 2);
-            ctx.stroke();
-          }
-          // overlay icon based on state
-          let iconKind = null;
-          if (c.state === "waiting") iconKind = "wants";
-          else if (c.state === "happy") iconKind = "happy";
-          else if (c.state === "scratched") iconKind = "scratched";
-          // "arriving", "leaving", "resting" get no icon
-          if (iconKind) drawCatIcon(ctx, s.x, s.y - 4, iconKind, now);
-        } else {
-          drawPlayer(ctx, s.x, s.y, playerFacing);
+        const c = e.data;
+        drawCat(ctx, s.x, s.y - 4, c.catData.color, c.catData.earColor, c.catData.eyeColor);
+        // Glow ring only for the cat currently under the mouse cursor, AND only
+        // if that cat is "waiting" (interactable). Cursor highlight replaces the
+        // proximity-to-player highlight from the WASD version.
+        if (hoveredCatIdx === e.idx && c.state === "waiting") {
+          ctx.strokeStyle = "rgba(255, 200, 100, 0.7)";
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.ellipse(s.x, s.y, 14, 9, 0, 0, Math.PI * 2);
+          ctx.stroke();
         }
+        // overlay icon based on state
+        let iconKind = null;
+        if (c.state === "waiting") iconKind = "wants";
+        else if (c.state === "happy") iconKind = "happy";
+        else if (c.state === "scratched") iconKind = "scratched";
+        // "arriving", "leaving", "resting" get no icon
+        if (iconKind) drawCatIcon(ctx, s.x, s.y - 4, iconKind, now);
       });
 
       // Door event overlay: a hand reaches in briefly when the door opens
@@ -1071,7 +953,7 @@ export default function CatPettingGame() {
     };
     raf = requestAnimationFrame(render);
     return () => cancelAnimationFrame(raf);
-  }, [cats, nearbyCatIdx, playerFacing, doorEvent]);
+  }, [cats, hoveredCatIdx, doorEvent]);
 
   // ---- PETTING LOGIC ----
   const clearTimers = useCallback(() => {
@@ -1170,6 +1052,65 @@ export default function CatPettingGame() {
     setPhase("petting");
     setTimeout(() => setCatEntering(false), 350);
   }, []);
+
+  // ---- CANVAS HIT-TESTING ----
+  // Map a mouse event on the canvas DOM element to internal 320x240 canvas coords,
+  // then find the cat (if any) whose sprite bounding box contains that point.
+  // When two cats overlap on screen, prefer the one drawn most in the foreground —
+  // in iso projection that's the one with the larger screen-y (greater tx+ty).
+  //
+  // Returns the index of the hit cat in the `cats` array, or null if none.
+  const pickCatAtScreen = useCallback((event) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    // Convert from CSS pixel coords (event.clientX/Y) to internal canvas pixels (320x240).
+    // The canvas attribute width/height stays at ROOM_W/ROOM_H regardless of how big it's
+    // displayed on screen — we just rescale linearly.
+    const mx = ((event.clientX - rect.left) / rect.width) * ROOM_W;
+    const my = ((event.clientY - rect.top) / rect.height) * ROOM_H;
+
+    // Walk all cats, pick the foreground-most one whose sprite contains (mx, my).
+    // Cat sprite is drawn at worldToScreen(c.x, c.y) with vertical offset -4 (see render
+    // loop). Its visual bounding box covers roughly x in [-9, +12], y in [-18, +4] relative
+    // to the world-screen point. We use a slightly forgiving box for easier clicking.
+    let best = null;
+    let bestDepth = -Infinity; // larger (tx+ty) = more foreground
+    cats.forEach((c, i) => {
+      if (c.state !== "waiting") return; // only waiting cats are interactable
+      const s = worldToScreen(c.x, c.y);
+      const inside =
+        mx >= s.x - 10 && mx <= s.x + 12 &&
+        my >= s.y - 18 && my <= s.y + 5;
+      if (!inside) return;
+      const depth = c.x + c.y;
+      if (depth > bestDepth) {
+        bestDepth = depth;
+        best = i;
+      }
+    });
+    return best;
+  }, [cats]);
+
+  const onCanvasMouseMove = useCallback((event) => {
+    if (phase !== "room") return; // no hover highlight while petting popup is open
+    const hit = pickCatAtScreen(event);
+    setHoveredCatIdx(hit);
+  }, [phase, pickCatAtScreen]);
+
+  const onCanvasMouseLeaveRoom = useCallback(() => {
+    if (phase !== "room") return;
+    setHoveredCatIdx(null);
+  }, [phase]);
+
+  const onCanvasClick = useCallback((event) => {
+    if (phase !== "room") return;
+    const hit = pickCatAtScreen(event);
+    if (hit !== null) {
+      audio.play("click");
+      startPetting(hit);
+    }
+  }, [phase, pickCatAtScreen, startPetting, audio]);
 
   useEffect(() => {
     if (phase === "petting" && activeCat && !catEntering) scheduleWarning();
@@ -1345,13 +1286,19 @@ export default function CatPettingGame() {
           @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.55; } }
         `}</style>
 
-        {/* canvas room - fills the viewport. Pixel-art rendering set globally in index.html. */}
+        {/* canvas room - fills the viewport. Pixel-art rendering set globally in index.html.
+            Click-to-pet handlers (Entry 26): mouse move highlights the cat under cursor,
+            click on a "waiting" cat opens the petting popup. */}
         <canvas
           ref={canvasRef}
           width={ROOM_W} height={ROOM_H}
+          onClick={onCanvasClick}
+          onMouseMove={onCanvasMouseMove}
+          onMouseLeave={onCanvasMouseLeaveRoom}
           style={{
             display: "block",
             width: "100%", height: "100%",
+            cursor: hoveredCatIdx !== null ? "pointer" : "default",
           }}
         />
 
