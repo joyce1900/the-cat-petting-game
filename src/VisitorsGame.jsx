@@ -1267,6 +1267,8 @@ export default function CatPettingGame() {
 
   // The fixed viewport that holds all game UI. Size on screen = min(width-fit, height-fit)
   // preserving the 320:240 (4:3) aspect ratio. 320/240 = 1.3333..., 240/320 = 0.75.
+  // Pixel-art rendering (image-rendering: pixelated) is set globally in index.html
+  // on all canvas/img elements so we don't need to specify it here per-element.
   const viewportStyle = {
     position: "relative",
     width: "min(98vw, calc((100vh - 16px) * (4 / 3)))",
@@ -1274,7 +1276,6 @@ export default function CatPettingGame() {
     background: "linear-gradient(180deg, rgb(250,240,225) 0%, rgb(252,232,215) 100%)",
     border: "2px solid #5D4037",
     overflow: "hidden",
-    imageRendering: "pixelated",
   };
 
   // Pixel font sizes are in vh-relative units so they scale with the viewport.
@@ -1344,14 +1345,13 @@ export default function CatPettingGame() {
           @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.55; } }
         `}</style>
 
-        {/* canvas room - fills the viewport */}
+        {/* canvas room - fills the viewport. Pixel-art rendering set globally in index.html. */}
         <canvas
           ref={canvasRef}
           width={ROOM_W} height={ROOM_H}
           style={{
             display: "block",
             width: "100%", height: "100%",
-            imageRendering: "pixelated",
           }}
         />
 

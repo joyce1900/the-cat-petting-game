@@ -7,6 +7,17 @@
     <style>
       html, body, #root { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; }
       body { background: #1a1410; }
+
+      /* Force pixel-art-style rendering on all canvas and img elements.
+         When the browser scales these up, use nearest-neighbor (hard pixels)
+         instead of smoothing. Multiple values listed for cross-browser support
+         since not all browsers accept the same keyword. */
+      canvas, img {
+        image-rendering: pixelated;          /* Chrome, Edge, modern Firefox */
+        image-rendering: -moz-crisp-edges;   /* older Firefox */
+        image-rendering: crisp-edges;        /* Safari, fallback */
+        -ms-interpolation-mode: nearest-neighbor; /* old IE */
+      }
     </style>
   </head>
   <body>
