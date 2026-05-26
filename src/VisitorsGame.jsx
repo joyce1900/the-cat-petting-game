@@ -82,11 +82,14 @@ const PETTING_SPRITES_BY_CAT_ID = {
 };
 
 const CAT_PERSONALITIES = [
-  { type: "clingy",    color: "#F4A460", earColor: "#D4956A", eyeColor: "#5D4E37", threshold: 100, gainRate: 1.0,  warningInterval: 0    },
-  { type: "normal",    color: "#9E9E9E", earColor: "#757575", eyeColor: "#3A3A3A", threshold: 120, gainRate: 0.7,  warningInterval: 8000 },
-  { type: "tsundere",  color: "#F5F5F5", earColor: "#FFD1DC", eyeColor: "#6B8E9B", threshold: 140, gainRate: 0.5,  warningInterval: 5000 },
-  { type: "explosive", color: "#3A3A3A", earColor: "#1a1a1a", eyeColor: "#C9A84C", threshold: 90,  gainRate: 1.3,  warningInterval: 3500 },
-  { type: "sleepy",    color: "#D4956A", earColor: "#A67550", eyeColor: "#5B4636", threshold: 110, gainRate: 0.85, warningInterval: 9000 },
+  // Entry 34: thresholds all doubled (was 100/120/140/90/110) so each cat takes
+  // ~2x as long to satisfy. The shorter session lengths were leaving the player
+  // with nothing to do once all visible cats had been pet.
+  { type: "clingy",    color: "#F4A460", earColor: "#D4956A", eyeColor: "#5D4E37", threshold: 200, gainRate: 1.0,  warningInterval: 0    },
+  { type: "normal",    color: "#9E9E9E", earColor: "#757575", eyeColor: "#3A3A3A", threshold: 240, gainRate: 0.7,  warningInterval: 8000 },
+  { type: "tsundere",  color: "#F5F5F5", earColor: "#FFD1DC", eyeColor: "#6B8E9B", threshold: 280, gainRate: 0.5,  warningInterval: 5000 },
+  { type: "explosive", color: "#3A3A3A", earColor: "#1a1a1a", eyeColor: "#C9A84C", threshold: 180, gainRate: 1.3,  warningInterval: 3500 },
+  { type: "sleepy",    color: "#D4956A", earColor: "#A67550", eyeColor: "#5B4636", threshold: 220, gainRate: 0.85, warningInterval: 9000 },
 ];
 
 // Continuous-mode tuning
@@ -96,7 +99,7 @@ const MAX_CATS_IN_ROOM = 4;    // owner stops dropping off when this many are pr
 const REST_DURATION_MIN = 25000; // satisfied cats wait at least this long before wanting pets again (ms)
 const REST_DURATION_MAX = 60000; // ...and at most this long
 const PICKUP_CHANCE_INTERVAL = 35000; // every ~35s a satisfied cat may be picked up
-const DOOR_COOLDOWN_MS = 6000; // minimum time between door events so they don't overlap
+const DOOR_COOLDOWN_MS = 4000; // minimum time between door events. Entry 34: lowered 6s→4s for more frequent visitors.
 // (DOOR_EVENT_MS removed in Entry 32 — the doorway animation was removed in favor
 //  of an instant "chime + cat appears / disappears" effect.)
 const CAT_WALK_SPEED = 0.55; // tiles per second when a cat wanders or walks to/from the door (lowered from 0.7 in Entry 26 for a calmer, more idle feel)
@@ -629,6 +632,9 @@ const CAT_SPRITE_BASE = "/art/"; // prepended to each filename in ROOM_SPRITE_BY
 const BUBBLE_ICON_URL = "/art/bubble.png";
 const HEART_ICON_URL = "/art/heart.png";
 const ANNOYED_ICON_URL = "/art/annoyed.png";
+// Cat fur sprites (Entry 34) — three variations spawn from the cursor while petting,
+// each drifting in a random direction and fading out. Chosen randomly per spawn.
+const FUR_ICON_URLS = ["/art/fur1.png", "/art/fur2.png", "/art/fur3.png"];
 // Petting popup assets (Entry 30).
 //   - petting_background.png: backdrop inside the petting popup (320x240, pre-sized).
 //   - cat_gone.png: puff of smoke shown when a cat runs away from being pet too aggressively.
@@ -827,6 +833,14 @@ export default function CatPettingGame() {
   const scratchTimerRef = useRef(null);
   const petActiveRef = useRef(false);
   const warningActiveRef = useRef(false);
+  // Floating fur particles (Entry 34). Each entry: { id, src, x, y, dx, dy, rot }
+  //   x,y    = start position relative to the petting area (catAreaRef bounding box)
+  //   dx,dy  = displacement to drift to over the animation
+  //   rot    = small rotation angle in degrees applied during the drift
+  // Furs are spawned in handleMouseMove on successful pet samples and removed
+  // ~900ms later by a setTimeout. The animation itself runs in CSS (see below).
+  const [floatingFurs, setFloatingFurs] = useState([]);
+  const furIdRef = useRef(0);
 
   const activeCat = activeCatIdx !== null ? cats[activeCatIdx]?.catData : null;
 
@@ -932,7 +946,7 @@ export default function CatPettingGame() {
       if (prev.length >= MAX_CATS_IN_ROOM) return prev;
 
       const shouldSpawn = prev.length < MIN_CATS_IN_ROOM
-        || (Math.random() < 0.04);
+        || (Math.random() < 0.12); // Entry 34: bumped 0.04→0.12 so new cats arrive ~3x more often
       if (!shouldSpawn) return prev;
 
       // Pick a personality not currently present
@@ -1500,6 +1514,31 @@ export default function CatPettingGame() {
             // warning is active, but it's a small amount.
             setHappiness(prev => Math.min(activeCat.threshold, prev + activeCat.gainRate * 0.3));
           }
+
+          // Spawn a fur particle at the cursor location (Entry 34). Position is
+          // computed relative to the petting area's bounding box so it lands
+          // exactly under the cursor regardless of where on screen the popup is.
+          // Each fur drifts in a random direction with a small rotation.
+          if (!warningActive && catAreaRef.current) {
+            const rect = catAreaRef.current.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            // Random drift direction & distance. Furs scatter slightly upward
+            // (negative y bias) since gravity-defying floating-up reads better
+            // than random scatter — mimics the bubble/heart "rise and fade".
+            const angle = Math.random() * Math.PI * 2;            // any direction
+            const distance = 18 + Math.random() * 22;             // 18-40 px
+            const dx = Math.cos(angle) * distance;
+            const dy = Math.sin(angle) * distance - 14;           // upward bias
+            const rot = (Math.random() - 0.5) * 60;               // -30..+30 deg
+            const src = FUR_ICON_URLS[Math.floor(Math.random() * FUR_ICON_URLS.length)];
+            const id = ++furIdRef.current;
+            setFloatingFurs(prev => [...prev, { id, src, x, y, dx, dy, rot }]);
+            // Remove after the CSS animation completes
+            setTimeout(() => {
+              setFloatingFurs(prev => prev.filter(f => f.id !== id));
+            }, 900);
+          }
         }
       }
     }
@@ -1775,6 +1814,40 @@ export default function CatPettingGame() {
                       }}
                     />
                   )}
+
+                  {/* Floating fur particles (Entry 34). Spawn point comes from
+                      the cursor's position when handleMouseMove credited a pet.
+                      x/y are in the same coord space as catAreaRef's bounding
+                      box (CSS pixels of the rendered popup), so we convert to
+                      percentages so the particle stays anchored even if the
+                      window is resized mid-animation. Width is set by the same
+                      "authored sprite px / 320 of parent width" rule we use for
+                      the main cat. */}
+                  {floatingFurs.map(f => {
+                    const rect = catAreaRef.current
+                      ? catAreaRef.current.getBoundingClientRect()
+                      : null;
+                    const pctX = rect ? (f.x / rect.width) * 100 : 50;
+                    const pctY = rect ? (f.y / rect.height) * 100 : 50;
+                    return (
+                      <img
+                        key={f.id}
+                        src={f.src}
+                        alt=""
+                        draggable={false}
+                        className="fur-particle"
+                        style={{
+                          left: `${pctX}%`,
+                          top: `${pctY}%`,
+                          width: `${(16 / 320) * 100}%`, // fur sprites authored at 16x16
+                          height: "auto",
+                          "--dx": `${f.dx}px`,
+                          "--dy": `${f.dy}px`,
+                          "--rot": `${f.rot}deg`,
+                        }}
+                      />
+                    );
+                  })}
                 </div>
               ) : (
                 // SVG MODE (legacy): original popup for cats that don't have art yet.
