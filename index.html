@@ -27,6 +27,21 @@
       html, body, button, canvas, * {
         cursor: url('/art/cursor_pointinghand.png') 1 1, auto;
       }
+
+      /* Floating fur particles spawned during petting (Entry 34).
+         Each particle drifts from its spawn point in a random direction with
+         a small rotation, fading out over ~900ms. The per-particle direction
+         is set via inline --dx, --dy, --rot CSS variables. */
+      .fur-particle {
+        position: absolute;
+        pointer-events: none;
+        animation: fur-drift 900ms ease-out forwards;
+        will-change: transform, opacity;
+      }
+      @keyframes fur-drift {
+        0%   { transform: translate(-50%, -50%) rotate(0deg); opacity: 1; }
+        100% { transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy))) rotate(var(--rot)); opacity: 0; }
+      }
     </style>
   </head>
   <body>
