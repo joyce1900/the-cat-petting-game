@@ -656,6 +656,14 @@ export default function CatPettingGame() {
   const [phase, setPhase] = useState("room"); // "room" or "petting"
   const [cats, setCats] = useState([]); // persistent list: [{ id, catData, x, y, targetX, targetY, wanderUntil, state, restUntil, becameRestingAt }]
   const [activeCatIdx, setActiveCatIdx] = useState(null);
+  // activeCatIdRef tracks the *id* of the cat currently being pet, while
+  // activeCatIdx tracks its *index* in the cats array. These can desync when
+  // OTHER cats arrive (push to end — safe) or get picked up (filter — shifts
+  // indices). Entry 34b bug fix: previously the popup would silently switch to
+  // a different cat (or vanish entirely) when a resting cat was picked up
+  // mid-petting, because activeCatIdx pointed to a now-stale slot. We now
+  // track the id and an effect re-aligns activeCatIdx whenever cats changes.
+  const activeCatIdRef = useRef(null);
   // Index of the cat the mouse is currently hovering over (drawn with a highlight ring).
   // null when no cat is under the cursor. Replaces the proximity-based nearbyCatIdx from
   // the WASD-player version: now that the game is click-driven (Entry 26), highlight is
@@ -842,7 +850,34 @@ export default function CatPettingGame() {
   const [floatingFurs, setFloatingFurs] = useState([]);
   const furIdRef = useRef(0);
 
-  const activeCat = activeCatIdx !== null ? cats[activeCatIdx]?.catData : null;
+  // activeCat is the personality data of the cat currently being pet, or null.
+  // Entry 34b: derive by id rather than by index, so it stays correct even if
+  // the cats array gets shorter (another cat picked up) or reorders mid-petting.
+  const activeCat = (() => {
+    if (activeCatIdRef.current === null) return null;
+    const c = cats.find(x => x.id === activeCatIdRef.current);
+    return c ? c.catData : null;
+  })();
+
+  // Keep activeCatIdx aligned with the pet cat's actual position in the cats
+  // array. If cats reorders (e.g. another cat is picked up and removed), the
+  // index that was valid when startPetting fired may now point at a different
+  // cat — or be out of bounds entirely. We watch cats and re-derive the index
+  // from activeCatIdRef.current on every change.
+  useEffect(() => {
+    if (activeCatIdRef.current === null) return;
+    const correctIdx = cats.findIndex(c => c.id === activeCatIdRef.current);
+    if (correctIdx === -1) {
+      // The cat we were petting somehow disappeared. Should be rare (we never
+      // pickup a non-resting cat, and a petting cat isn't resting). Defensive:
+      // close the popup gracefully.
+      activeCatIdRef.current = null;
+      setActiveCatIdx(null);
+      setPhase("room");
+    } else if (correctIdx !== activeCatIdx) {
+      setActiveCatIdx(correctIdx);
+    }
+  }, [cats, activeCatIdx]);
 
   // ---- DAY START ----
   // Build cat schedule deterministically:
@@ -1256,6 +1291,7 @@ export default function CatPettingGame() {
     setTimeout(() => {
       // Close the petting popup
       setActiveCatIdx(null);
+      activeCatIdRef.current = null;
       setPhase("room");
 
       // After a brief delay (so the result icon is visible), settle into resting state.
@@ -1333,8 +1369,11 @@ export default function CatPettingGame() {
   // Keep the ref in sync so enterWarningPhase can re-schedule after a calm-down
   useEffect(() => { scheduleWarningRef.current = scheduleWarning; }, [scheduleWarning]);
 
-  const startPetting = useCallback((catIndex) => {
+  const startPetting = useCallback((catIndex, catId) => {
     setActiveCatIdx(catIndex);
+    // Lock onto this cat's id so we can re-find it in the cats array even if
+    // other cats arrive/leave during the petting session (Entry 34b).
+    activeCatIdRef.current = catId;
     setHappiness(0);
     setMood("neutral");
     setPetGameState("playing");
@@ -1405,9 +1444,10 @@ export default function CatPettingGame() {
     const hit = pickCatAtScreen(event);
     if (hit !== null) {
       audio.play("click");
-      startPetting(hit);
+      const cat = cats[hit];
+      startPetting(hit, cat ? cat.id : null);
     }
-  }, [phase, pickCatAtScreen, startPetting, audio]);
+  }, [phase, pickCatAtScreen, startPetting, audio, cats]);
 
   useEffect(() => {
     if (phase === "petting" && activeCat && !catEntering) scheduleWarning();
@@ -1480,6 +1520,38 @@ export default function CatPettingGame() {
 
   const handleMouseMove = useCallback((e) => {
     if (phase !== "petting" || petGameState !== "playing" || !activeCat || catEntering) return;
+
+    // Entry 34b: only react to mouse movement that's actually on the cat's body.
+    // Previously the entire popup container received pet events, so wiggling the
+    // cursor over the dim border area outside the painted petting backdrop would
+    // still drive happiness (or trigger speed-cap warnings).
+    //
+    // We compute the cat sprite's on-screen bounding box from the cached image
+    // dimensions in pettingSpritesRef and the current popup size, then early-out
+    // if the cursor isn't inside that box.
+    const sprites = pettingSpritesRef.current[activeCat.type];
+    const refImg = sprites?.normal;
+    if (!refImg || !refImg.naturalWidth || !catAreaRef.current) return;
+    const popupRect = catAreaRef.current.getBoundingClientRect();
+    // Cat is centered, sized to (naturalWidth / 320) of popup width. We give
+    // a tiny padding (4 popup-relative px) so cursor-on-cat-edge still counts.
+    const catW = (refImg.naturalWidth / 320) * popupRect.width;
+    const catH = (refImg.naturalHeight / 320) * popupRect.width;
+    const padding = 4;
+    const catLeft   = popupRect.left + popupRect.width  / 2 - catW / 2 - padding;
+    const catTop    = popupRect.top  + popupRect.height / 2 - catH / 2 - padding;
+    const catRight  = catLeft + catW + padding * 2;
+    const catBottom = catTop + catH + padding * 2;
+    const onCat = e.clientX >= catLeft && e.clientX <= catRight
+               && e.clientY >= catTop  && e.clientY <= catBottom;
+    if (!onCat) {
+      // Update lastMousePos.t so when the cursor returns onto the cat, the
+      // first speed sample isn't computed against an ancient timestamp (which
+      // would give a near-zero or near-infinite dt and false-trigger warning).
+      setLastMousePos({ x: e.clientX, y: e.clientY, t: Date.now() });
+      return;
+    }
+
     const now = Date.now();
     if (lastMousePos) {
       const dx = Math.abs(e.clientX - lastMousePos.x);
