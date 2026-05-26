@@ -497,8 +497,11 @@ const AUDIO_FILES = {
 };
 
 // Base volume for each clip (0..1). Multiplied by category volume at runtime.
+// Entry 33 tuning: bgm slightly lowered (0.5 → 0.32) so purr is more audible
+// during petting. purr is already capped at the maximum 1.0, so reducing bgm
+// is how we get a louder-feeling purr.
 const BASE_VOLUMES = {
-  bgm: 0.5,
+  bgm: 0.32,
   purr: 1.0,
   meow: 0.9,
   hiss: 0.8,
@@ -1202,12 +1205,28 @@ export default function CatPettingGame() {
 
   const finishPetting = useCallback((result) => {
     clearTimers();
+    // CAPTURE THE CAT BY ID, not index. Entry 33 bug fix: previously this used
+    // `i === activeCatIdx` in setCats, but the inner 1500ms setTimeout below
+    // would fire AFTER the popup closed and the user might have started petting
+    // another cat. The closed-over activeCatIdx pointed at a now-stale or
+    // re-occupied slot, so the original cat never got transitioned from
+    // "happy"/"scratched" back to "resting" — it would stay frozen with the
+    // result icon overhead forever.
+    //
+    // Reading from cats[activeCatIdx] up-front locks in the cat's identity.
+    // All subsequent updates filter by `c.id === pinnedId`, which is stable
+    // regardless of array reordering or other cats being petted in the meantime.
+    const pinnedCat = activeCatIdx !== null ? cats[activeCatIdx] : null;
+    const pinnedId = pinnedCat ? pinnedCat.id : null;
+
     // Briefly show the result state, then transition to "resting".
     // Also pin cat in place so it doesn't drift while the result icon shows.
-    setCats(prev => prev.map((c, i) => i === activeCatIdx
-      ? { ...c, state: result, targetX: c.x, targetY: c.y, wanderUntil: Date.now() + 2000 }
-      : c
-    ));
+    if (pinnedId !== null) {
+      setCats(prev => prev.map(c => c.id === pinnedId
+        ? { ...c, state: result, targetX: c.x, targetY: c.y, wanderUntil: Date.now() + 2000 }
+        : c
+      ));
+    }
     setWarningActive(false);
     warningActiveRef.current = false;
     setTailWag(false);
@@ -1222,9 +1241,10 @@ export default function CatPettingGame() {
       // After a brief delay (so the result icon is visible), settle into resting state.
       // The cat stays in the room. After REST_DURATION expires, it becomes "waiting" again.
       setTimeout(() => {
+        if (pinnedId === null) return;
         const restMs = REST_DURATION_MIN + Math.random() * (REST_DURATION_MAX - REST_DURATION_MIN);
         const now = Date.now();
-        setCats(prev => prev.map((c, i) => i === activeCatIdx
+        setCats(prev => prev.map(c => c.id === pinnedId
           ? {
               ...c,
               state: "resting",
@@ -1237,7 +1257,47 @@ export default function CatPettingGame() {
         ));
       }, 1500);
     }, 800);
-  }, [activeCatIdx, clearTimers, audio]);
+  }, [activeCatIdx, cats, clearTimers, audio]);
+
+  // Start the cat's "I'm getting annoyed" warning phase. Used by:
+  //   - the personality's natural warningInterval timer (scheduleWarning below)
+  //   - the speed-cap check in handleMouseMove (Entry 33) — fast petting now
+  //     triggers a warning instead of silently capping happiness gain
+  // After WARNING_DURATION the timer checks whether the player kept petting:
+  //   - still petting → cat runs away (finishPetting "scratched")
+  //   - stopped in time → cat calms, schedule next natural warning
+  const enterWarningPhase = useCallback(() => {
+    if (!activeCat) return;
+    if (warningActiveRef.current) return; // already warning
+    clearTimers();
+    setWarningActive(true);
+    warningActiveRef.current = true;
+    setTailWag(true);
+
+    scratchTimerRef.current = setTimeout(() => {
+      if (petActiveRef.current && warningActiveRef.current) {
+        // Player ignored the warning - cat hisses and jumps away
+        setWarningActive(false);
+        warningActiveRef.current = false;
+        setTailWag(false);
+        audio.play("hiss");
+        setMood("annoyed");
+        setPetGameState("scratched");
+        setTimeout(() => finishPetting("scratched"), 600);
+      } else {
+        // Player stopped in time - cat calms, can keep petting
+        setWarningActive(false);
+        warningActiveRef.current = false;
+        setTailWag(false);
+        scheduleWarningRef.current?.();
+      }
+    }, WARNING_DURATION);
+  }, [activeCat, finishPetting, clearTimers, audio]);
+
+  // scheduleWarning needs to reference itself recursively (re-arms after a calm)
+  // but `enterWarningPhase` also needs to reference it. We use a ref to break the
+  // circular dependency without recreating both functions on every state change.
+  const scheduleWarningRef = useRef(null);
 
   const scheduleWarning = useCallback(() => {
     if (!activeCat || activeCat.warningInterval === 0) return;
@@ -1246,34 +1306,12 @@ export default function CatPettingGame() {
     const delay = activeCat.warningInterval + (Math.random() * jitter * 2 - jitter);
 
     warningTimerRef.current = setTimeout(() => {
-      // Cat starts warning: ears flatten, tail wags, eyes narrow (in PettingCat SVG)
-      setWarningActive(true);
-      warningActiveRef.current = true;
-      setTailWag(true);
-
-      // After WARNING_DURATION ms, check whether the player kept petting:
-      // - If yes (petActiveRef still true) → cat jumps away, session ends
-      // - If no → cat calms down, normal petting can resume, schedule next warning
-      scratchTimerRef.current = setTimeout(() => {
-        if (petActiveRef.current && warningActiveRef.current) {
-          // Player ignored the warning - cat hisses (angry meow) and jumps away
-          setWarningActive(false);
-          warningActiveRef.current = false;
-          setTailWag(false);
-          audio.play("hiss");
-          setMood("annoyed");
-          setPetGameState("scratched");
-          setTimeout(() => finishPetting("scratched"), 600);
-        } else {
-          // Player stopped in time - cat calms, can keep petting
-          setWarningActive(false);
-          warningActiveRef.current = false;
-          setTailWag(false);
-          scheduleWarning();
-        }
-      }, WARNING_DURATION);
+      enterWarningPhase();
     }, delay);
-  }, [activeCat, finishPetting, clearTimers, audio]);
+  }, [activeCat, enterWarningPhase, clearTimers]);
+
+  // Keep the ref in sync so enterWarningPhase can re-schedule after a calm-down
+  useEffect(() => { scheduleWarningRef.current = scheduleWarning; }, [scheduleWarning]);
 
   const startPetting = useCallback((catIndex) => {
     setActiveCatIdx(catIndex);
@@ -1406,14 +1444,35 @@ export default function CatPettingGame() {
     else audio.pause("purr");
   }, [isPetting, warningActive, petGameState, phase, audio]);
 
+  // Speed cap: petting must stay below this speed (in CSS pixels per millisecond)
+  // or the cat enters warning phase. ~2.0 px/ms = 2000 px/second is a deliberately
+  // fast threshold — normal back-and-forth petting strokes are ~0.3-0.8 px/ms; only
+  // frantic mouse wiggling exceeds it. Tweak in Entry 33.
+  const PET_SPEED_LIMIT = 2.0;
+
   const handleMouseMove = useCallback((e) => {
     if (phase !== "petting" || petGameState !== "playing" || !activeCat || catEntering) return;
+    const now = Date.now();
     if (lastMousePos) {
       const dx = Math.abs(e.clientX - lastMousePos.x);
       const dy = Math.abs(e.clientY - lastMousePos.y);
       const movement = dx + dy;
-      if (movement > 2 && movement < 22) {
-        const now = Date.now();
+
+      // Compute speed in px/ms. Guard against dt=0 when two move events fire
+      // in the same millisecond (rare but possible on high-Hz mice).
+      const dt = Math.max(1, now - (lastMousePos.t || now));
+      const speed = movement / dt;
+
+      if (movement > 1 && speed > PET_SPEED_LIMIT && !warningActive) {
+        // Player moved too fast — cat enters warning phase. If they keep
+        // petting after this, scratchTimer below will trigger run-away.
+        enterWarningPhase();
+        // Don't credit happiness for this frame, but don't dock either —
+        // the warning itself is the punishment.
+      } else if (movement > 2 && movement < 60) {
+        // Normal stroke speed — credit happiness. Cap rate by lastPetTimeRef
+        // so happiness can't go up faster than ~16 times/sec even if mouse
+        // events come faster.
         if (now - lastPetTimeRef.current > 60) {
           lastPetTimeRef.current = now;
           setIsPetting(true);
@@ -1422,17 +1481,16 @@ export default function CatPettingGame() {
           if (!warningActive) {
             setHappiness(prev => Math.min(activeCat.threshold, prev + activeCat.gainRate));
           } else {
+            // During warning, gentle petting (slow) gives reduced credit —
+            // it's possible to recover happiness if you slow down once a
+            // warning is active, but it's a small amount.
             setHappiness(prev => Math.min(activeCat.threshold, prev + activeCat.gainRate * 0.3));
           }
         }
-      } else if (movement >= 22 && !warningActive) {
-        setMood("annoyed");
-        setHappiness(prev => Math.max(0, prev - 6));
-        setTimeout(() => { if (!warningActiveRef.current) setMood("neutral"); }, 600);
       }
     }
-    setLastMousePos({ x: e.clientX, y: e.clientY });
-  }, [phase, petGameState, activeCat, lastMousePos, catEntering, warningActive]);
+    setLastMousePos({ x: e.clientX, y: e.clientY, t: now });
+  }, [phase, petGameState, activeCat, lastMousePos, catEntering, warningActive, enterWarningPhase]);
 
   const handleMouseLeave = useCallback(() => {
     setIsPetting(false); petActiveRef.current = false; setLastMousePos(null);
