@@ -12,6 +12,12 @@ const ROOM_TILES_Y = 7;
 const ROOM_OFFSET_Y = 101; // room sits so its floor diamond aligns with the painted floor in room_background.png
 const PIXEL_SCALE = 2;
 const CAT_SIZE = 14;
+// How many pixels to nudge the cat sprite downward when drawing (Entry 28).
+// The hand-painted sprites are slightly taller than the old programmatic cat, so
+// without this offset the "wants pets" bubble icon overlapped the cat's head.
+// Increase = cat further down (more space between cat and icon).
+// Decrease = cat further up (closer to icon).
+const CAT_DRAW_VERTICAL_OFFSET = 5;
 
 // Hand-painted cat sprite filenames (Entry 27). These are the five unique cat
 // appearances in /public/art/. On first mount, they get shuffled and zipped
@@ -154,9 +160,14 @@ const drawFurniture = (ctx, item) => {
 // Cat sprite renderer. Two modes:
 //   1) If a loaded sprite image is provided, blit it centered horizontally at (x, y),
 //      with the bottom of the image aligned to y+4 (matches the old programmatic
-//      cat's shadow line, so worldToScreen positioning stays correct).
+//      cat's baseline, so worldToScreen positioning stays correct).
 //   2) If no sprite, fall back to the hand-coded colored-rect cat. This is what
 //      shows briefly before the PNGs load (or permanently if a sprite 404s).
+//
+// Shadow note (Entry 28): the previous code drew a small ellipse shadow under every
+// cat. That's been removed because the hand-painted sprite PNGs already include their
+// own painted shadows. The fallback path still draws its own shadow, since the code-
+// drawn rectangle cat doesn't have a built-in shadow.
 //
 // `sprite` is an HTMLImageElement or null/undefined.
 // Returns the rendered bounding box so the click hit-tester can use the actual
@@ -164,25 +175,27 @@ const drawFurniture = (ctx, item) => {
 const drawCat = (ctx, x, y, color, earColor, eyeColor, sprite) => {
   ctx.imageSmoothingEnabled = false;
 
-  // shadow (drawn under both sprite and fallback paths)
-  ctx.fillStyle = "rgba(0,0,0,0.18)";
-  ctx.beginPath();
-  ctx.ellipse(x, y + 4, 9, 3, 0, 0, Math.PI * 2);
-  ctx.fill();
-
   if (sprite && sprite.complete && sprite.naturalWidth > 0) {
     // Sprite mode: blit the PNG. We center the image horizontally at x and align
-    // its bottom edge to y+4 (just above the shadow ellipse), so the cat appears
-    // to be standing on the shadow regardless of how tall the artist drew it.
+    // its bottom edge to y+4 (just below the cat's standing point), so the cat
+    // appears positioned correctly on the floor regardless of how tall the artist
+    // drew it. NO programmatic shadow — the sprite includes one.
+    // CAT_DRAW_VERTICAL_OFFSET nudges the cat down so it doesn't overlap the
+    // bubble/heart icon drawn above it.
     const w = sprite.naturalWidth;
     const h = sprite.naturalHeight;
     const drawX = Math.round(x - w / 2);
-    const drawY = Math.round(y + 4 - h);
+    const drawY = Math.round(y + 4 - h + CAT_DRAW_VERTICAL_OFFSET);
     ctx.drawImage(sprite, drawX, drawY, w, h);
     return { left: drawX, top: drawY, right: drawX + w, bottom: drawY + h };
   }
 
   // Fallback: original programmatic pixel cat (used until sprite loads, or if 404).
+  // This path DOES include a shadow since the rect cat doesn't have a built-in one.
+  ctx.fillStyle = "rgba(0,0,0,0.18)";
+  ctx.beginPath();
+  ctx.ellipse(x, y + 4, 9, 3, 0, 0, Math.PI * 2);
+  ctx.fill();
   ctx.fillStyle = color;
   ctx.fillRect(x - 6, y - 4, 12, 8);
   ctx.fillRect(x - 5, y - 9, 10, 6);
@@ -202,17 +215,34 @@ const drawCat = (ctx, x, y, color, earColor, eyeColor, sprite) => {
   return { left: x - 6, top: y - 11, right: x + 10, bottom: y + 4 };
 };
 
-// Draws a small icon above a cat (heart, sleep z, scratch mark, or "wants pets" bubble)
-const drawCatIcon = (ctx, x, y, kind, time) => {
+// Draws a small icon above a cat. Behavior per kind:
+//   - "wants":     bubble.png (or fallback code-drawn bubble) hovering above the cat
+//                  with a gentle bob. Indicates the cat wants to be pet.
+//   - "happy":     heart.png (or fallback "♥" glyph) hovering above the cat with a
+//                  gentle bob. Shown briefly after a successful petting session.
+//   - "fled":      "..." text (post-flee marker; rare).
+//   - "scratched": ✕ glyph (cat got annoyed).
+//   - "petted":    floating "z" sleep effect (cooldown state).
+// `icons` is an object { bubble: HTMLImageElement|null, heart: HTMLImageElement|null }
+// — pass loaded PNGs and they'll be used instead of the code-drawn fallbacks.
+const drawCatIcon = (ctx, x, y, kind, time, icons) => {
   ctx.imageSmoothingEnabled = false;
   const iconY = y - 18;
   if (kind === "happy") {
-    // pink heart, slight bob
     const bob = Math.sin(time / 200) * 1;
-    ctx.fillStyle = "#E91E63";
-    ctx.font = "bold 11px monospace";
-    ctx.textAlign = "center";
-    ctx.fillText("♥", x, iconY + bob);
+    const heart = icons && icons.heart;
+    if (heart && heart.complete && heart.naturalWidth > 0) {
+      // Center the heart PNG above the cat with the bob offset
+      const w = heart.naturalWidth;
+      const h = heart.naturalHeight;
+      ctx.drawImage(heart, Math.round(x - w / 2), Math.round(iconY + bob - h / 2), w, h);
+    } else {
+      // Fallback: glyph
+      ctx.fillStyle = "#E91E63";
+      ctx.font = "bold 11px monospace";
+      ctx.textAlign = "center";
+      ctx.fillText("♥", x, iconY + bob);
+    }
   } else if (kind === "fled") {
     ctx.fillStyle = "#999";
     ctx.font = "9px monospace";
@@ -224,35 +254,37 @@ const drawCatIcon = (ctx, x, y, kind, time) => {
     ctx.textAlign = "center";
     ctx.fillText("✕", x, iconY);
   } else if (kind === "wants") {
-    // thought bubble with paw print, gentle bob
     const bob = Math.sin(time / 400) * 1;
-    const bx = x;
-    const by = iconY + bob - 2;
-    // bubble background
-    ctx.fillStyle = "#FFFFFF";
-    ctx.beginPath();
-    ctx.ellipse(bx, by, 7, 6, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = "#5D4037";
-    ctx.lineWidth = 1;
-    ctx.stroke();
-    // little tail of bubble
-    ctx.fillStyle = "#FFFFFF";
-    ctx.fillRect(bx - 2, by + 5, 2, 2);
-    ctx.strokeRect(bx - 2, by + 5, 2, 2);
-    ctx.fillStyle = "#FFFFFF";
-    ctx.fillRect(bx - 3, by + 7, 1, 1);
-    // paw print inside (4 toe pads + main pad)
-    ctx.fillStyle = "#E87272";
-    // main pad
-    ctx.fillRect(bx - 1, by, 3, 3);
-    // toe pads
-    ctx.fillRect(bx - 3, by - 2, 1, 1);
-    ctx.fillRect(bx - 1, by - 3, 1, 1);
-    ctx.fillRect(bx + 1, by - 3, 1, 1);
-    ctx.fillRect(bx + 3, by - 2, 1, 1);
+    const bubble = icons && icons.bubble;
+    if (bubble && bubble.complete && bubble.naturalWidth > 0) {
+      // Center the bubble PNG above the cat with the bob offset
+      const w = bubble.naturalWidth;
+      const h = bubble.naturalHeight;
+      ctx.drawImage(bubble, Math.round(x - w / 2), Math.round(iconY + bob - h / 2), w, h);
+    } else {
+      // Fallback: code-drawn bubble with paw print
+      const bx = x;
+      const by = iconY + bob - 2;
+      ctx.fillStyle = "#FFFFFF";
+      ctx.beginPath();
+      ctx.ellipse(bx, by, 7, 6, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#5D4037";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.fillStyle = "#FFFFFF";
+      ctx.fillRect(bx - 2, by + 5, 2, 2);
+      ctx.strokeRect(bx - 2, by + 5, 2, 2);
+      ctx.fillStyle = "#FFFFFF";
+      ctx.fillRect(bx - 3, by + 7, 1, 1);
+      ctx.fillStyle = "#E87272";
+      ctx.fillRect(bx - 1, by, 3, 3);
+      ctx.fillRect(bx - 3, by - 2, 1, 1);
+      ctx.fillRect(bx - 1, by - 3, 1, 1);
+      ctx.fillRect(bx + 1, by - 3, 1, 1);
+      ctx.fillRect(bx + 3, by - 2, 1, 1);
+    }
   } else if (kind === "petted") {
-    // sleep z floating up
     const t = (time / 80) % 30;
     ctx.fillStyle = "#A1887F";
     ctx.font = "8px monospace";
@@ -544,6 +576,12 @@ function useAudioBank(musicVolume, sfxVolume) {
 // Asset paths. We load images once at mount and reuse the HTMLImageElement(s).
 const BG_IMAGE_SRC = "/art/room_background.png";
 const CAT_SPRITE_BASE = "/art/"; // prepended to each filename in CAT_SPRITE_FILES
+// Cat-state icons (Entry 28). Both rendered above the cat with a gentle bob animation.
+//   - bubble.png: shown above a "waiting" cat to indicate it wants to be pet.
+//   - heart.png:  shown above a "happy" cat right after a successful petting session.
+// The icons fall back to the old programmatic drawings if the PNG fails to load.
+const BUBBLE_ICON_URL = "/art/bubble.png";
+const HEART_ICON_URL = "/art/heart.png";
 // Custom cursors (Entry 27). Pointing hand = default everywhere; petting hand =
 // shown when the mouse is over a "waiting" cat. CSS cursor: url() syntax includes
 // a hotspot (x, y) — the pixel that "counts" as the click point.
@@ -614,6 +652,24 @@ export default function CatPettingGame() {
         catSpritesRef.current[p.type] = img;
       }
     });
+  }, []);
+
+  // Cat-state icon sprites (Entry 28). Same pattern as cat sprites — preload once
+  // and pass into drawCatIcon every frame; falls back to code-drawn versions if a
+  // PNG fails to load.
+  const catIconsRef = useRef({ bubble: null, heart: null });
+  useEffect(() => {
+    const load = (key, url) => {
+      const img = new Image();
+      img.src = url;
+      img.onload = () => { catIconsRef.current[key] = img; };
+      img.onerror = () => { /* fallback to code-drawn icon */ };
+      if (img.complete && img.naturalWidth > 0) {
+        catIconsRef.current[key] = img;
+      }
+    };
+    load("bubble", BUBBLE_ICON_URL);
+    load("heart", HEART_ICON_URL);
   }, []);
 
   // ---- AUDIO ----
@@ -1011,7 +1067,7 @@ export default function CatPettingGame() {
         else if (c.state === "happy") iconKind = "happy";
         else if (c.state === "scratched") iconKind = "scratched";
         // "arriving", "leaving", "resting" get no icon
-        if (iconKind) drawCatIcon(ctx, s.x, s.y - 4, iconKind, now);
+        if (iconKind) drawCatIcon(ctx, s.x, s.y - 4, iconKind, now, catIconsRef.current);
       });
       catHitBoxesRef.current = newBoxes;
 
