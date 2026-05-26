@@ -241,10 +241,10 @@ const drawCat = (ctx, x, y, color, earColor, eyeColor, sprite, facing) => {
 // — pass loaded PNGs and they'll be used instead of the code-drawn fallbacks.
 const drawCatIcon = (ctx, x, y, kind, time, icons) => {
   ctx.imageSmoothingEnabled = false;
-  // Icon sits well above the cat's head. Tuned in Entry 28: -18 was too close
-  // to the painted cat sprites, so bumped to -21 to give the bubble/heart 3 more
-  // pixels of breathing room above the cat.
-  const iconY = y - 21;
+  // Icon sits well above the cat's head. Tuned across Entries 28/29: started at
+  // -18, bumped to -21 to clear the painted cat sprites, bumped again to -23
+  // for a touch more breathing room.
+  const iconY = y - 23;
   if (kind === "happy") {
     const bob = Math.sin(time / 200) * 1;
     const heart = icons && icons.heart;
@@ -1497,6 +1497,10 @@ export default function CatPettingGame() {
                 display: "flex", flexDirection: "column", alignItems: "center",
                 padding: "4% 4% 3%",
                 boxSizing: "border-box",
+                // Belt-and-suspenders cursor — outer popup div already sets pet hand,
+                // but setting it here too guarantees no child element accidentally
+                // inherits the global pointing hand from index.html's `*` selector.
+                cursor: `url('${CURSOR_PET_URL}') ${CURSOR_PET_HOTSPOT.x} ${CURSOR_PET_HOTSPOT.y}, auto`,
               }}
             >
               {/* slim decorative top bar (no text) */}
@@ -1505,13 +1509,18 @@ export default function CatPettingGame() {
                 height: "4%", background: "#5D4037",
               }}/>
 
-              {/* cat petting area - takes full popup */}
+              {/* cat petting area - takes full popup
+                  Cursor (Entry 29): unconditionally pet-hand. Previously this had
+                  cursor logic that switched between "not-allowed" / "grabbing" /
+                  "pointer" depending on petting state, which leaked through the
+                  outer popup's pet cursor. We force pet cursor here too so the
+                  entire petting experience uses one consistent cursor. */}
               <div ref={catAreaRef} onMouseMove={handleMouseMove} onMouseLeave={handleMouseLeave}
                 style={{
                   flex: 1, width: "100%",
                   display: "flex", alignItems: "center", justifyContent: "center",
                   position: "relative",
-                  cursor: petGameState === "scratched" ? "not-allowed" : isPetting ? "grabbing" : "pointer",
+                  cursor: `url('${CURSOR_PET_URL}') ${CURSOR_PET_HOTSPOT.x} ${CURSOR_PET_HOTSPOT.y}, auto`,
                 }}>
                 <div style={{
                   transition: "transform 0.3s ease, opacity 0.3s ease",
