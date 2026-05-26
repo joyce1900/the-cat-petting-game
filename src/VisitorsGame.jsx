@@ -503,8 +503,9 @@ const AUDIO_FILES = {
 // Entry 33 tuning: bgm slightly lowered (0.5 → 0.32) so purr is more audible
 // during petting. purr is already capped at the maximum 1.0, so reducing bgm
 // is how we get a louder-feeling purr.
+// Entry 34c: bgm lowered further (0.32 → 0.18) per playtester feedback.
 const BASE_VOLUMES = {
-  bgm: 0.32,
+  bgm: 0.18,
   purr: 1.0,
   meow: 0.9,
   hiss: 0.8,
@@ -1529,19 +1530,23 @@ export default function CatPettingGame() {
     // We compute the cat sprite's on-screen bounding box from the cached image
     // dimensions in pettingSpritesRef and the current popup size, then early-out
     // if the cursor isn't inside that box.
+    //
+    // Entry 34c: the PNG bounding box was too generous — the artist leaves
+    // transparent margin around the cat for ears/tail, so the "hit box" extended
+    // well past the visible body. We shrink the box to BODY_SCALE of the sprite
+    // dimensions, centered on the same point. 0.65 ≈ visible body area in cat1
+    // reference screenshot.
     const sprites = pettingSpritesRef.current[activeCat.type];
     const refImg = sprites?.normal;
     if (!refImg || !refImg.naturalWidth || !catAreaRef.current) return;
     const popupRect = catAreaRef.current.getBoundingClientRect();
-    // Cat is centered, sized to (naturalWidth / 320) of popup width. We give
-    // a tiny padding (4 popup-relative px) so cursor-on-cat-edge still counts.
-    const catW = (refImg.naturalWidth / 320) * popupRect.width;
-    const catH = (refImg.naturalHeight / 320) * popupRect.width;
-    const padding = 4;
-    const catLeft   = popupRect.left + popupRect.width  / 2 - catW / 2 - padding;
-    const catTop    = popupRect.top  + popupRect.height / 2 - catH / 2 - padding;
-    const catRight  = catLeft + catW + padding * 2;
-    const catBottom = catTop + catH + padding * 2;
+    const BODY_SCALE = 0.65;
+    const catW = (refImg.naturalWidth / 320) * popupRect.width * BODY_SCALE;
+    const catH = (refImg.naturalHeight / 320) * popupRect.width * BODY_SCALE;
+    const catLeft   = popupRect.left + popupRect.width  / 2 - catW / 2;
+    const catTop    = popupRect.top  + popupRect.height / 2 - catH / 2;
+    const catRight  = catLeft + catW;
+    const catBottom = catTop + catH;
     const onCat = e.clientX >= catLeft && e.clientX <= catRight
                && e.clientY >= catTop  && e.clientY <= catBottom;
     if (!onCat) {
