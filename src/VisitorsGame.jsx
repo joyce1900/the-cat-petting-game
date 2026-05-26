@@ -45,11 +45,39 @@ const ROOM_SPRITE_BY_CAT_ID = {
 // To add petting art for a new cat, add a new entry; no code changes needed.
 const PETTING_SPRITES_BY_CAT_ID = {
   cat1: {
-    normal: "cat1_petting/cat1_normal.png",
+    normal:    "cat1_petting/cat1_normal.png",
     halfhappy: "cat1_petting/cat1_halfhappy.png",
-    happy: "cat1_petting/cat1_happy.png",
-    angry1: "cat1_petting/cat1_angry1.png",
-    angry2: "cat1_petting/cat1_angry2.png",
+    happy:     "cat1_petting/cat1_happy.png",
+    angry1:    "cat1_petting/cat1_angry1.png",
+    angry2:    "cat1_petting/cat1_angry2.png",
+  },
+  cat2: {
+    normal:    "cat2_petting/cat2_normal.png",
+    halfhappy: "cat2_petting/cat2_halfhappy.png",
+    happy:     "cat2_petting/cat2_happy.png",
+    angry1:    "cat2_petting/cat2_angry1.png",
+    angry2:    "cat2_petting/cat2_angry2.png",
+  },
+  cat3: {
+    normal:    "cat3_petting/cat3_normal.png",
+    halfhappy: "cat3_petting/cat3_halfhappy.png",
+    happy:     "cat3_petting/cat3_happy.png",
+    angry1:    "cat3_petting/cat3_angry1.png",
+    angry2:    "cat3_petting/cat3_angry2.png",
+  },
+  cat4: {
+    normal:    "cat4_petting/cat4_normal.png",
+    halfhappy: "cat4_petting/cat4_halfhappy.png",
+    happy:     "cat4_petting/cat4_happy.png",
+    angry1:    "cat4_petting/cat4_angry1.png",
+    angry2:    "cat4_petting/cat4_angry2.png",
+  },
+  cat5: {
+    normal:    "cat5_petting/cat5_normal.png",
+    halfhappy: "cat5_petting/cat5_halfhappy.png",
+    happy:     "cat5_petting/cat5_happy.png",
+    angry1:    "cat5_petting/cat5_angry1.png",
+    angry2:    "cat5_petting/cat5_angry2.png",
   },
 };
 
