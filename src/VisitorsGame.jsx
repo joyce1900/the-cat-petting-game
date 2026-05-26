@@ -1213,20 +1213,26 @@ export default function CatPettingGame() {
     // "happy"/"scratched" back to "resting" — it would stay frozen with the
     // result icon overhead forever.
     //
-    // Reading from cats[activeCatIdx] up-front locks in the cat's identity.
-    // All subsequent updates filter by `c.id === pinnedId`, which is stable
-    // regardless of array reordering or other cats being petted in the meantime.
-    const pinnedCat = activeCatIdx !== null ? cats[activeCatIdx] : null;
-    const pinnedId = pinnedCat ? pinnedCat.id : null;
-
-    // Briefly show the result state, then transition to "resting".
-    // Also pin cat in place so it doesn't drift while the result icon shows.
-    if (pinnedId !== null) {
-      setCats(prev => prev.map(c => c.id === pinnedId
+    // We resolve the cat id via a functional setCats so we read the *current*
+    // cats array without putting `cats` in this callback's dependency list.
+    // (Entry 33b bug fix: putting `cats` in deps caused finishPetting to be
+    // rebuilt every cat-movement tick, which cascaded into scheduleWarning /
+    // enterWarningPhase being rebuilt, the petting effect re-running, and
+    // its cleanup clearing the in-progress warning timer — leaving the
+    // popup permanently stuck in the warning state.)
+    let pinnedId = null;
+    setCats(prev => {
+      const pinnedCat = activeCatIdx !== null ? prev[activeCatIdx] : null;
+      pinnedId = pinnedCat ? pinnedCat.id : null;
+      // Briefly show the result state, then transition to "resting".
+      // Also pin cat in place so it doesn't drift while the result icon shows.
+      if (pinnedId === null) return prev;
+      return prev.map(c => c.id === pinnedId
         ? { ...c, state: result, targetX: c.x, targetY: c.y, wanderUntil: Date.now() + 2000 }
         : c
-      ));
-    }
+      );
+    });
+
     setWarningActive(false);
     warningActiveRef.current = false;
     setTailWag(false);
@@ -1257,7 +1263,7 @@ export default function CatPettingGame() {
         ));
       }, 1500);
     }, 800);
-  }, [activeCatIdx, cats, clearTimers, audio]);
+  }, [activeCatIdx, clearTimers, audio]);
 
   // Start the cat's "I'm getting annoyed" warning phase. Used by:
   //   - the personality's natural warningInterval timer (scheduleWarning below)
@@ -1445,10 +1451,18 @@ export default function CatPettingGame() {
   }, [isPetting, warningActive, petGameState, phase, audio]);
 
   // Speed cap: petting must stay below this speed (in CSS pixels per millisecond)
-  // or the cat enters warning phase. ~2.0 px/ms = 2000 px/second is a deliberately
-  // fast threshold — normal back-and-forth petting strokes are ~0.3-0.8 px/ms; only
-  // frantic mouse wiggling exceeds it. Tweak in Entry 33.
+  // or the cat enters warning phase. Two conditions must BOTH hold to qualify
+  // as "too fast":
+  //   1. movement (this event's distance) >= MIN_FAST_DISTANCE — guards against
+  //      high-Hz mice where a tiny natural hand tremor (a few px) over a tiny
+  //      dt (1-2 ms) would otherwise compute a huge speed and false-trigger.
+  //   2. speed (movement / dt) > PET_SPEED_LIMIT — the actual "this is a fast
+  //      stroke" check.
+  // Tuning notes for Entry 33b: PET_SPEED_LIMIT 2.0 px/ms ≈ 2000 px/sec; normal
+  // petting strokes are ~0.3-0.8 px/ms. MIN_FAST_DISTANCE 25 px is "a real
+  // sweep across the cat", not a wiggle.
   const PET_SPEED_LIMIT = 2.0;
+  const MIN_FAST_DISTANCE = 25;
 
   const handleMouseMove = useCallback((e) => {
     if (phase !== "petting" || petGameState !== "playing" || !activeCat || catEntering) return;
@@ -1463,9 +1477,9 @@ export default function CatPettingGame() {
       const dt = Math.max(1, now - (lastMousePos.t || now));
       const speed = movement / dt;
 
-      if (movement > 1 && speed > PET_SPEED_LIMIT && !warningActive) {
-        // Player moved too fast — cat enters warning phase. If they keep
-        // petting after this, scratchTimer below will trigger run-away.
+      if (movement >= MIN_FAST_DISTANCE && speed > PET_SPEED_LIMIT && !warningActive) {
+        // Player moved fast AND covered real distance — cat enters warning phase.
+        // If they keep petting after this, scratchTimer triggers run-away.
         enterWarningPhase();
         // Don't credit happiness for this frame, but don't dock either —
         // the warning itself is the punishment.
