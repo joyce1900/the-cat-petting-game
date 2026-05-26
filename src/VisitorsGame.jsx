@@ -99,7 +99,7 @@ const MAX_CATS_IN_ROOM = 4;    // owner stops dropping off when this many are pr
 const REST_DURATION_MIN = 25000; // satisfied cats wait at least this long before wanting pets again (ms)
 const REST_DURATION_MAX = 60000; // ...and at most this long
 const PICKUP_CHANCE_INTERVAL = 35000; // every ~35s a satisfied cat may be picked up
-const DOOR_COOLDOWN_MS = 4000; // minimum time between door events. Entry 34: lowered 6s→4s for more frequent visitors.
+const DOOR_COOLDOWN_MS = 3000; // minimum time between door events. Entry 34: lowered 6s→4s, then 4s→3s for more responsive visitor flow.
 // (DOOR_EVENT_MS removed in Entry 32 — the doorway animation was removed in favor
 //  of an instant "chime + cat appears / disappears" effect.)
 const CAT_WALK_SPEED = 0.55; // tiles per second when a cat wanders or walks to/from the door (lowered from 0.7 in Entry 26 for a calmer, more idle feel)
@@ -981,8 +981,18 @@ export default function CatPettingGame() {
       if (now - lastDoorActionAtRef.current < DOOR_COOLDOWN_MS) return prev;
       if (prev.length >= MAX_CATS_IN_ROOM) return prev;
 
+      // Spawn probability is graded by current cat count (Entry 34d):
+      //   0 cats → guaranteed spawn (handled by `prev.length < MIN_CATS_IN_ROOM`)
+      //   1 cat  → 50%  — room feels empty, fill it fast
+      //   2 cats → 30%
+      //   3 cats → 15%  — already cozy, taper off
+      //   4 cats → 0    — blocked by MAX_CATS_IN_ROOM check above
+      // Sampling cadence is every 3s in the parent interval, so e.g. with 1 cat
+      // the expected wait for a new cat is ~6 seconds.
+      const SPAWN_RATE_BY_COUNT = { 1: 0.50, 2: 0.30, 3: 0.15 };
+      const spawnRate = SPAWN_RATE_BY_COUNT[prev.length] ?? 0;
       const shouldSpawn = prev.length < MIN_CATS_IN_ROOM
-        || (Math.random() < 0.12); // Entry 34: bumped 0.04→0.12 so new cats arrive ~3x more often
+        || Math.random() < spawnRate;
       if (!shouldSpawn) return prev;
 
       // Pick a personality not currently present
@@ -1043,7 +1053,7 @@ export default function CatPettingGame() {
 
   // Periodically maybe spawn a new cat
   useEffect(() => {
-    const interval = setInterval(() => maybeSpawnCat(), 5000);
+    const interval = setInterval(() => maybeSpawnCat(), 3000);
     return () => clearInterval(interval);
   }, [maybeSpawnCat]);
 
