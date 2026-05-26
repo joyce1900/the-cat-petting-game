@@ -19,17 +19,39 @@ const CAT_SIZE = 14;
 // Decrease = cat further up (closer to icon).
 const CAT_DRAW_VERTICAL_OFFSET = 5;
 
-// Hand-painted cat sprite filenames (Entry 27). These are the five unique cat
-// appearances in /public/art/. On first mount, they get shuffled and zipped
-// against CAT_PERSONALITIES so each personality (Mochi/Whiskers/Princess/Gremlin/Pudding)
-// gets a stable random sprite for this play session. Re-shuffles on full page reload.
-const CAT_SPRITE_FILES = [
-  "cat1_white.png",
-  "cat2_black.png",
-  "cat3_cow.png",
-  "cat4_pointed.png",
-  "cat5_orange.png",
-];
+// Cat appearance system (Entry 30 rework).
+// Each cat has an "id" (cat1..cat5) that determines:
+//   - their room sprite (the small isometric tile that shows in the room view)
+//   - their petting sprites (the larger sprites used inside the petting popup)
+// At first mount, the 5 ids are shuffled and assigned one-to-one to the 5
+// personalities in CAT_PERSONALITIES. The mapping is stored in
+// `personalityToCatIdRef` and stable for the whole play session.
+//
+// Petting sprites are optional per id — if a cat doesn't have hand-painted
+// petting art yet, we fall back to the procedural SVG cat in the popup.
+const CAT_IDS = ["cat1", "cat2", "cat3", "cat4", "cat5"];
+
+// Room sprite (small tile sprite shown in the room view) for each id.
+const ROOM_SPRITE_BY_CAT_ID = {
+  cat1: "cat1_white.png",
+  cat2: "cat2_black.png",
+  cat3: "cat3_cow.png",
+  cat4: "cat4_pointed.png",
+  cat5: "cat5_orange.png",
+};
+
+// Petting popup sprites by id. Each cat that has hand-painted petting art lists
+// the 5 mood states here. Cats not in this map fall back to the procedural SVG.
+// To add petting art for a new cat, add a new entry; no code changes needed.
+const PETTING_SPRITES_BY_CAT_ID = {
+  cat1: {
+    normal: "cat1_petting/cat1_normal.png",
+    halfhappy: "cat1_petting/cat1_halfhappy.png",
+    happy: "cat1_petting/cat1_happy.png",
+    angry1: "cat1_petting/cat1_angry1.png",
+    angry2: "cat1_petting/cat1_angry2.png",
+  },
+};
 
 const CAT_PERSONALITIES = [
   { type: "clingy",    color: "#F4A460", earColor: "#D4956A", eyeColor: "#5D4E37", threshold: 100, gainRate: 1.0,  warningInterval: 0    },
@@ -235,9 +257,9 @@ const drawCat = (ctx, x, y, color, earColor, eyeColor, sprite, facing) => {
 //   - "happy":     heart.png (or fallback "♥" glyph) hovering above the cat with a
 //                  gentle bob. Shown briefly after a successful petting session.
 //   - "fled":      "..." text (post-flee marker; rare).
-//   - "scratched": ✕ glyph (cat got annoyed).
+//   - "scratched": annoyed.png (or fallback ✕ glyph) — cat ran away from petting.
 //   - "petted":    floating "z" sleep effect (cooldown state).
-// `icons` is an object { bubble: HTMLImageElement|null, heart: HTMLImageElement|null }
+// `icons` is an object { bubble, heart, annoyed } of HTMLImageElement | null.
 // — pass loaded PNGs and they'll be used instead of the code-drawn fallbacks.
 const drawCatIcon = (ctx, x, y, kind, time, icons) => {
   ctx.imageSmoothingEnabled = false;
@@ -266,10 +288,18 @@ const drawCatIcon = (ctx, x, y, kind, time, icons) => {
     ctx.textAlign = "center";
     ctx.fillText("· · ·", x, iconY);
   } else if (kind === "scratched") {
-    ctx.fillStyle = "#D32F2F";
-    ctx.font = "bold 11px monospace";
-    ctx.textAlign = "center";
-    ctx.fillText("✕", x, iconY);
+    const annoyed = icons && icons.annoyed;
+    if (annoyed && annoyed.complete && annoyed.naturalWidth > 0) {
+      // Static (no bob) — annoyed expression should feel sharp, not playful.
+      const w = annoyed.naturalWidth;
+      const h = annoyed.naturalHeight;
+      ctx.drawImage(annoyed, Math.round(x - w / 2), Math.round(iconY - h / 2), w, h);
+    } else {
+      ctx.fillStyle = "#D32F2F";
+      ctx.font = "bold 11px monospace";
+      ctx.textAlign = "center";
+      ctx.fillText("✕", x, iconY);
+    }
   } else if (kind === "wants") {
     const bob = Math.sin(time / 400) * 1;
     const bubble = icons && icons.bubble;
@@ -602,13 +632,19 @@ function useAudioBank(musicVolume, sfxVolume) {
 
 // Asset paths. We load images once at mount and reuse the HTMLImageElement(s).
 const BG_IMAGE_SRC = "/art/room_background.png";
-const CAT_SPRITE_BASE = "/art/"; // prepended to each filename in CAT_SPRITE_FILES
-// Cat-state icons (Entry 28). Both rendered above the cat with a gentle bob animation.
-//   - bubble.png: shown above a "waiting" cat to indicate it wants to be pet.
-//   - heart.png:  shown above a "happy" cat right after a successful petting session.
-// The icons fall back to the old programmatic drawings if the PNG fails to load.
+const CAT_SPRITE_BASE = "/art/"; // prepended to each filename in ROOM_SPRITE_BY_CAT_ID / PETTING_SPRITES_BY_CAT_ID
+// Cat-state icons. Rendered above the cat sprite in the room view.
+//   - bubble.png:  "waiting" cat wants to be pet (bobs gently).
+//   - heart.png:   "happy" cat right after a successful petting (bobs gently).
+//   - annoyed.png: cat ran away after being pet through a warning (Entry 30).
 const BUBBLE_ICON_URL = "/art/bubble.png";
 const HEART_ICON_URL = "/art/heart.png";
+const ANNOYED_ICON_URL = "/art/annoyed.png";
+// Petting popup assets (Entry 30).
+//   - petting_background.png: backdrop inside the petting popup (320x240, pre-sized).
+//   - cat_gone.png: puff of smoke shown when a cat runs away from being pet too aggressively.
+const PETTING_BG_URL = "/art/petting_background.png";
+const CAT_GONE_URL = "/art/cat_gone.png";
 // Custom cursors (Entry 27). Pointing hand = default everywhere; petting hand =
 // shown when the mouse is over a "waiting" cat. CSS cursor: url() syntax includes
 // a hotspot (x, y) — the pixel that "counts" as the click point.
@@ -651,40 +687,68 @@ export default function CatPettingGame() {
     }
   }, []);
 
-  // Cat sprites (Entry 27). On first mount, we shuffle CAT_SPRITE_FILES and assign one
-  // to each personality in CAT_PERSONALITIES. The mapping is keyed by personality.type
-  // and lives in a ref so it stays stable for the whole session — same personality
-  // always shows the same sprite. We also preload each Image so they're ready by the
-  // time cats appear in the room (the renderer falls back to the old colored-rect cat
-  // drawing if a sprite hasn't loaded yet, so nothing breaks if a 404 occurs).
+  // Cat appearance / petting sprite system (Entry 30 rework).
+  // - personalityToCatIdRef: { [personality.type]: "cat1"|...|"cat5" } stable for session
+  // - catSpritesRef:          { [personality.type]: HTMLImageElement } room view sprite
+  // - pettingSpritesRef:      { [personality.type]: { normal, halfhappy, happy, angry1, angry2 } }
+  //                           only populated for personalities whose cat id is in PETTING_SPRITES_BY_CAT_ID;
+  //                           cats without entries here fall back to the procedural SVG popup.
+  const personalityToCatIdRef = useRef({});
   const catSpritesRef = useRef({}); // { [personality.type]: HTMLImageElement }
+  const pettingSpritesRef = useRef({}); // { [personality.type]: { mood: HTMLImageElement } }
   // Per-frame map of cat index → actual drawn bounding box {left, top, right, bottom}.
   // Populated by the render loop on every frame; consumed by pickCatAtScreen for hit-testing.
   const catHitBoxesRef = useRef({});
   useEffect(() => {
-    // Fisher-Yates shuffle of the sprite filenames
-    const shuffled = [...CAT_SPRITE_FILES];
+    // Fisher-Yates shuffle of the cat ids
+    const shuffled = [...CAT_IDS];
     for (let i = shuffled.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
     }
-    // Pair them with personalities by index. If counts ever drift apart, we wrap.
-    CAT_PERSONALITIES.forEach((p, i) => {
-      const fname = shuffled[i % shuffled.length];
+
+    // Helper: load an image and stash it via a setter callback.
+    const loadImage = (relPath, onLoadedImage) => {
       const img = new Image();
-      img.src = CAT_SPRITE_BASE + fname;
-      img.onload = () => { catSpritesRef.current[p.type] = img; };
-      img.onerror = () => { /* leave undefined; renderer falls back to drawCat */ };
+      img.src = CAT_SPRITE_BASE + relPath;
+      img.onload = () => onLoadedImage(img);
+      img.onerror = () => { /* leave the slot undefined; renderer has fallbacks */ };
       if (img.complete && img.naturalWidth > 0) {
-        catSpritesRef.current[p.type] = img;
+        onLoadedImage(img);
+      }
+    };
+
+    // Assign each personality a cat id, load that id's room sprite, and (if available)
+    // load all of that id's petting-popup sprites.
+    CAT_PERSONALITIES.forEach((p, i) => {
+      const catId = shuffled[i % shuffled.length];
+      personalityToCatIdRef.current[p.type] = catId;
+
+      // Room sprite
+      const roomFile = ROOM_SPRITE_BY_CAT_ID[catId];
+      if (roomFile) {
+        loadImage(roomFile, (img) => { catSpritesRef.current[p.type] = img; });
+      }
+
+      // Petting sprites (only if this cat id has hand-painted petting art)
+      const pettingMap = PETTING_SPRITES_BY_CAT_ID[catId];
+      if (pettingMap) {
+        pettingSpritesRef.current[p.type] = {};
+        Object.entries(pettingMap).forEach(([mood, relPath]) => {
+          loadImage(relPath, (img) => {
+            // Ensure the slot still exists (defensive against unmount)
+            if (!pettingSpritesRef.current[p.type]) pettingSpritesRef.current[p.type] = {};
+            pettingSpritesRef.current[p.type][mood] = img;
+          });
+        });
       }
     });
   }, []);
 
-  // Cat-state icon sprites (Entry 28). Same pattern as cat sprites — preload once
+  // Cat-state icon sprites (Entries 28/30). Same pattern as cat sprites — preload once
   // and pass into drawCatIcon every frame; falls back to code-drawn versions if a
   // PNG fails to load.
-  const catIconsRef = useRef({ bubble: null, heart: null });
+  const catIconsRef = useRef({ bubble: null, heart: null, annoyed: null });
   useEffect(() => {
     const load = (key, url) => {
       const img = new Image();
@@ -697,7 +761,17 @@ export default function CatPettingGame() {
     };
     load("bubble", BUBBLE_ICON_URL);
     load("heart", HEART_ICON_URL);
+    load("annoyed", ANNOYED_ICON_URL);
   }, []);
+
+  // Petting popup global assets (Entry 30): backdrop + "ran away" puff of smoke.
+  // These live as React state since they're consumed by JSX (<img src=...>) rather
+  // than canvas draws, and we want the popup to re-render when they finish loading.
+  // Default URLs point to the public/art files; if they fail to load, the <img>
+  // tags simply show no image (broken-image icon would be very off-brand, so we
+  // just rely on them being present in the deployed build).
+  const pettingBgUrl = PETTING_BG_URL;
+  const catGoneUrl = CAT_GONE_URL;
 
   // ---- AUDIO ----
   // Volumes are fixed - no in-game adjustment. Tune the constants in useAudioBank's BASE_VOLUMES if needed.
@@ -1302,6 +1376,21 @@ export default function CatPettingGame() {
     return () => cancelAnimationFrame(raf);
   }, [tailWag]);
 
+  // Petting popup animation frame counter (Entry 30). Increments every ~200ms
+  // while a warning is active so the angry1/angry2 PNGs alternate (tail-wagging
+  // effect). Outside warning periods, the displayed sprite is determined by
+  // happiness/mood and doesn't need a frame counter — so the timer only runs
+  // during warnings to keep idle work minimal.
+  const [pettingAnimFrame, setPettingAnimFrame] = useState(0);
+  useEffect(() => {
+    if (!warningActive) return;
+    if (phase !== "petting") return;
+    const id = setInterval(() => {
+      setPettingAnimFrame(f => (f + 1) % 1000);
+    }, 200);
+    return () => clearInterval(id);
+  }, [warningActive, phase]);
+
   // happiness no longer decays when player stops petting -- it stays where it is.
   // (lossRate field on cat data is unused now but kept for potential future tuning)
 
@@ -1486,73 +1575,146 @@ export default function CatPettingGame() {
         />
 
         {/* PET POPUP - rendered as a window over the room.
-            Cursor (Entry 28): the entire popup uses the petting-hand cursor — you're
-            in pet-the-cat mode, the pointing hand would be wrong here. The !important
-            via inline style overrides the global pointing cursor from index.html. */}
-        {showPetPopup && (
-          <div style={{
-              position: "absolute", inset: 0,
-              background: "rgba(40,30,25,0.55)",
-              display: "flex", alignItems: "center", justifyContent: "center",
-              zIndex: 50,
-              cursor: `url('${CURSOR_PET_URL}') ${CURSOR_PET_HOTSPOT.x} ${CURSOR_PET_HOTSPOT.y}, auto`,
-            }}
-          >
+            Two visual modes (Entry 30):
+              - PNG MODE (cat has hand-painted petting art): petting_background.png
+                fills the popup, and one of the per-mood cat sprites (normal /
+                halfhappy / happy / angry1 / angry2 / cat_gone) is shown.
+              - SVG MODE (cat has no petting art yet): legacy procedural SVG cat
+                inside a white card. Will be removed when all 5 cats have art.
+            Cursor (Entry 28-29): unconditionally pet-hand throughout. */}
+        {showPetPopup && (() => {
+          const pettingSprites = pettingSpritesRef.current[activeCat.type];
+          const usePngMode = !!pettingSprites && Object.keys(pettingSprites).length > 0;
+
+          // Choose which petting sprite to show this frame.
+          // Priority: scratched > warning > happy > halfhappy > normal.
+          let moodKey = "normal";
+          if (petGameState === "scratched") {
+            moodKey = "_gone"; // special: use the global cat_gone image, not a per-cat sprite
+          } else if (warningActive) {
+            // Alternate angry1/angry2 every animation frame (set in pettingAnimFrame effect)
+            moodKey = pettingAnimFrame % 2 === 0 ? "angry1" : "angry2";
+          } else if (activeCat && happiness >= activeCat.threshold) {
+            moodKey = "happy";
+          } else if (activeCat && happiness >= activeCat.threshold * 0.5) {
+            moodKey = "halfhappy";
+          } else {
+            moodKey = "normal";
+          }
+
+          // Resolve to an image URL. cat_gone is a single global PNG; everything
+          // else comes from the per-personality petting sprite map.
+          let pngSrc = null;
+          if (usePngMode) {
+            if (moodKey === "_gone") {
+              pngSrc = catGoneUrl;
+            } else {
+              const img = pettingSprites[moodKey];
+              if (img && img.src) pngSrc = img.src;
+            }
+          }
+
+          return (
             <div style={{
-                position: "relative",
-                width: "75%", height: "82%",
-                background: "#FFF5E6",
-                border: "1.5px solid #5D4037",
-                boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
-                display: "flex", flexDirection: "column", alignItems: "center",
-                padding: "4% 4% 3%",
-                boxSizing: "border-box",
-                // Belt-and-suspenders cursor — outer popup div already sets pet hand,
-                // but setting it here too guarantees no child element accidentally
-                // inherits the global pointing hand from index.html's `*` selector.
+                position: "absolute", inset: 0,
+                background: "rgba(40,30,25,0.55)",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                zIndex: 50,
                 cursor: `url('${CURSOR_PET_URL}') ${CURSOR_PET_HOTSPOT.x} ${CURSOR_PET_HOTSPOT.y}, auto`,
               }}
             >
-              {/* slim decorative top bar (no text) */}
-              <div style={{
-                position: "absolute", top: -1, left: -1, right: -1,
-                height: "4%", background: "#5D4037",
-              }}/>
-
-              {/* cat petting area - takes full popup
-                  Cursor (Entry 29): unconditionally pet-hand. Previously this had
-                  cursor logic that switched between "not-allowed" / "grabbing" /
-                  "pointer" depending on petting state, which leaked through the
-                  outer popup's pet cursor. We force pet cursor here too so the
-                  entire petting experience uses one consistent cursor. */}
-              <div ref={catAreaRef} onMouseMove={handleMouseMove} onMouseLeave={handleMouseLeave}
-                style={{
-                  flex: 1, width: "100%",
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  position: "relative",
-                  cursor: `url('${CURSOR_PET_URL}') ${CURSOR_PET_HOTSPOT.x} ${CURSOR_PET_HOTSPOT.y}, auto`,
-                }}>
-                <div style={{
-                  transition: "transform 0.3s ease, opacity 0.3s ease",
-                  transform: catEntering ? "scale(0.7)" : isPetting && !warningActive ? "scale(1.03)" : "scale(1)",
-                  opacity: catEntering ? 0 : 1,
-                  width: "70%", maxWidth: "60%",
-                  cursor: `url('${CURSOR_PET_URL}') ${CURSOR_PET_HOTSPOT.x} ${CURSOR_PET_HOTSPOT.y}, auto`,
-                }}>
-                  <PettingCat
-                    mood={petGameState === "scratched" ? "annoyed" : mood}
-                    color={activeCat.color}
-                    earColor={activeCat.earColor}
-                    eyeColor={activeCat.eyeColor}
-                    warning={warningActive && petGameState !== "scratched"}
-                    scratched={petGameState === "scratched"}
-                    tailWag={tailWag}
-                  />
+              {usePngMode ? (
+                // PNG MODE: full-bleed petting_background + centered mood sprite.
+                // The mouse-move handler is attached to this whole container so
+                // petting-the-cat works anywhere inside the popup, just like before.
+                <div
+                  ref={catAreaRef}
+                  onMouseMove={handleMouseMove}
+                  onMouseLeave={handleMouseLeave}
+                  style={{
+                    position: "relative",
+                    // Same aspect ratio as the room (320:240). Scaled to fit the viewport;
+                    // width caps at the same value as the room view so the popup feels
+                    // like the same "screen" with a backdrop swap.
+                    width: "100%", height: "100%",
+                    backgroundImage: `url('${pettingBgUrl}')`,
+                    backgroundSize: "100% 100%",
+                    backgroundRepeat: "no-repeat",
+                    backgroundPosition: "center",
+                    cursor: `url('${CURSOR_PET_URL}') ${CURSOR_PET_HOTSPOT.x} ${CURSOR_PET_HOTSPOT.y}, auto`,
+                  }}
+                >
+                  {pngSrc && (
+                    <img
+                      src={pngSrc}
+                      alt=""
+                      draggable={false}
+                      style={{
+                        position: "absolute",
+                        // Center the cat sprite. The artist drew these at the
+                        // intended on-screen size (1:1 game pixels), but our
+                        // popup CSS is in % of the scaled viewport — so we use
+                        // top/left:50% + translate(-50%, -50%) to keep it centered
+                        // regardless of the popup's actual rendered size. The
+                        // image's intrinsic dimensions are preserved.
+                        top: "50%", left: "50%",
+                        transform: "translate(-50%, -50%)",
+                        // No transitions — sprite swap should feel instant + game-y.
+                        pointerEvents: "none",
+                      }}
+                    />
+                  )}
                 </div>
-              </div>
+              ) : (
+                // SVG MODE (legacy): original popup for cats that don't have art yet.
+                <div style={{
+                    position: "relative",
+                    width: "75%", height: "82%",
+                    background: "#FFF5E6",
+                    border: "1.5px solid #5D4037",
+                    boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
+                    display: "flex", flexDirection: "column", alignItems: "center",
+                    padding: "4% 4% 3%",
+                    boxSizing: "border-box",
+                    cursor: `url('${CURSOR_PET_URL}') ${CURSOR_PET_HOTSPOT.x} ${CURSOR_PET_HOTSPOT.y}, auto`,
+                  }}
+                >
+                  {/* slim decorative top bar (no text) */}
+                  <div style={{
+                    position: "absolute", top: -1, left: -1, right: -1,
+                    height: "4%", background: "#5D4037",
+                  }}/>
+
+                  <div ref={catAreaRef} onMouseMove={handleMouseMove} onMouseLeave={handleMouseLeave}
+                    style={{
+                      flex: 1, width: "100%",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      position: "relative",
+                      cursor: `url('${CURSOR_PET_URL}') ${CURSOR_PET_HOTSPOT.x} ${CURSOR_PET_HOTSPOT.y}, auto`,
+                    }}>
+                    <div style={{
+                      transition: "transform 0.3s ease, opacity 0.3s ease",
+                      transform: catEntering ? "scale(0.7)" : isPetting && !warningActive ? "scale(1.03)" : "scale(1)",
+                      opacity: catEntering ? 0 : 1,
+                      width: "70%", maxWidth: "60%",
+                      cursor: `url('${CURSOR_PET_URL}') ${CURSOR_PET_HOTSPOT.x} ${CURSOR_PET_HOTSPOT.y}, auto`,
+                    }}>
+                      <PettingCat
+                        mood={petGameState === "scratched" ? "annoyed" : mood}
+                        color={activeCat.color}
+                        earColor={activeCat.earColor}
+                        eyeColor={activeCat.eyeColor}
+                        warning={warningActive && petGameState !== "scratched"}
+                        scratched={petGameState === "scratched"}
+                        tailWag={tailWag}
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* mute toggle */}
         {muteBtn}
