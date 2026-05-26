@@ -169,10 +169,14 @@ const drawFurniture = (ctx, item) => {
 // own painted shadows. The fallback path still draws its own shadow, since the code-
 // drawn rectangle cat doesn't have a built-in shadow.
 //
+// Facing (Entry 28): the sprite PNGs are drawn left-facing by default. When `facing`
+// is "right", we horizontal-flip the sprite by scaling x by -1 before drawImage.
+// Falls back to natural drawing if facing is undefined.
+//
 // `sprite` is an HTMLImageElement or null/undefined.
 // Returns the rendered bounding box so the click hit-tester can use the actual
 // drawn area (more accurate than a fixed box when the artist changes sprite size).
-const drawCat = (ctx, x, y, color, earColor, eyeColor, sprite) => {
+const drawCat = (ctx, x, y, color, earColor, eyeColor, sprite, facing) => {
   ctx.imageSmoothingEnabled = false;
 
   if (sprite && sprite.complete && sprite.naturalWidth > 0) {
@@ -186,7 +190,17 @@ const drawCat = (ctx, x, y, color, earColor, eyeColor, sprite) => {
     const h = sprite.naturalHeight;
     const drawX = Math.round(x - w / 2);
     const drawY = Math.round(y + 4 - h + CAT_DRAW_VERTICAL_OFFSET);
-    ctx.drawImage(sprite, drawX, drawY, w, h);
+    if (facing === "right") {
+      // Flip horizontally. We translate to (x, drawY), scale x by -1 to mirror,
+      // then drawImage from (-w/2, 0) so the flipped sprite lands centered at x.
+      ctx.save();
+      ctx.translate(Math.round(x), drawY);
+      ctx.scale(-1, 1);
+      ctx.drawImage(sprite, -Math.round(w / 2), 0, w, h);
+      ctx.restore();
+    } else {
+      ctx.drawImage(sprite, drawX, drawY, w, h);
+    }
     return { left: drawX, top: drawY, right: drawX + w, bottom: drawY + h };
   }
 
@@ -227,7 +241,10 @@ const drawCat = (ctx, x, y, color, earColor, eyeColor, sprite) => {
 // — pass loaded PNGs and they'll be used instead of the code-drawn fallbacks.
 const drawCatIcon = (ctx, x, y, kind, time, icons) => {
   ctx.imageSmoothingEnabled = false;
-  const iconY = y - 18;
+  // Icon sits well above the cat's head. Tuned in Entry 28: -18 was too close
+  // to the painted cat sprites, so bumped to -21 to give the bubble/heart 3 more
+  // pixels of breathing room above the cat.
+  const iconY = y - 21;
   if (kind === "happy") {
     const bob = Math.sin(time / 200) * 1;
     const heart = icons && icons.heart;
@@ -787,6 +804,10 @@ export default function CatPettingGame() {
       state: initialState,
       restUntil: null,
       becameRestingAt: 0,
+      // Sprites are drawn left-facing by default; the movement tick updates this
+      // when the cat actually walks. Default "left" matches the painted artwork
+      // for newborn cats before they take their first step.
+      facing: "left",
     };
   }, [pickRandomSpot]);
 
@@ -934,6 +955,12 @@ export default function CatPettingGame() {
   // - "waiting": picks a new wander target after some delay
   // - "resting": picks a new wander target after some delay (more slowly)
   // - "leaving": when close to the door, triggers the door open event and waits to be picked up
+  //
+  // Facing (Entry 28): cats face either "left" or "right" on screen. The PNG sprite
+  // is drawn left-facing by default; "right" is rendered by horizontal flip in drawCat.
+  // We update facing only while moving, based on screen-space dx (= world dx - world dy
+  // in iso projection), so a stationary cat retains its last facing. New facing only
+  // sets if movement is meaningful — tiny jitter doesn't flip the cat.
   useEffect(() => {
     const TICK_MS = 60; // about 16fps for movement (smooth enough, low cost)
     const interval = setInterval(() => {
@@ -953,8 +980,17 @@ export default function CatPettingGame() {
           let newX = c.x;
           let newY = c.y;
           let arrivedAtTarget = false;
-
+          // Compute screen-space horizontal direction so we can update facing.
+          // In our isometric projection, screen_dx = world_dx - world_dy. Positive
+          // = moving right on screen; negative = moving left on screen.
+          // Only update facing when there's significant movement, otherwise tiny
+          // numerical noise would flicker the sprite.
+          let newFacing = c.facing || "left";
           if (dist > 0.05) {
+            const screenDx = dx - dy;
+            if (Math.abs(screenDx) > 0.05) {
+              newFacing = screenDx > 0 ? "right" : "left";
+            }
             const step = Math.min(speed * (TICK_MS / 1000), dist);
             newX = c.x + (dx / dist) * step;
             newY = c.y + (dy / dist) * step;
@@ -962,6 +998,7 @@ export default function CatPettingGame() {
           } else {
             arrivedAtTarget = true;
           }
+          if (newFacing !== c.facing) anyChanged = true;
 
           // Handle state transitions when target reached
           if (arrivedAtTarget) {
@@ -971,6 +1008,7 @@ export default function CatPettingGame() {
               anyChanged = true;
               return {
                 ...c, x: newX, y: newY,
+                facing: newFacing,
                 state: "waiting",
                 wanderUntil: now + 8000 + Math.random() * 7000,
               };
@@ -981,8 +1019,8 @@ export default function CatPettingGame() {
                 triggerDoorEvent("pickup", c.id);
               }
               // Cat stays at door waiting for the pickup event to complete
-              return c.x !== newX || c.y !== newY
-                ? { ...c, x: newX, y: newY }
+              return c.x !== newX || c.y !== newY || newFacing !== c.facing
+                ? { ...c, x: newX, y: newY, facing: newFacing }
                 : c;
             }
             // waiting or resting: maybe pick a new wander target
@@ -997,14 +1035,15 @@ export default function CatPettingGame() {
                 : 8000 + Math.random() * 12000;  // waiting cats pause 8-20s between strolls
               return {
                 ...c, x: newX, y: newY,
+                facing: newFacing,
                 targetX: newTarget.x, targetY: newTarget.y,
                 wanderUntil: now + idleMs,
               };
             }
           }
 
-          return newX !== c.x || newY !== c.y
-            ? { ...c, x: newX, y: newY }
+          return newX !== c.x || newY !== c.y || newFacing !== c.facing
+            ? { ...c, x: newX, y: newY, facing: newFacing }
             : c;
         });
         return anyChanged ? next : prev;
@@ -1057,7 +1096,7 @@ export default function CatPettingGame() {
         const s = worldToScreen(e.tx, e.ty);
         const c = e.data;
         const sprite = catSpritesRef.current[c.catData.type];
-        const box = drawCat(ctx, s.x, s.y - 4, c.catData.color, c.catData.earColor, c.catData.eyeColor, sprite);
+        const box = drawCat(ctx, s.x, s.y - 4, c.catData.color, c.catData.earColor, c.catData.eyeColor, sprite, c.facing);
         if (box) newBoxes[e.idx] = box;
         // No glow ring in Entry 27 — the custom mouse cursor (pointing → petting hand)
         // is now the only visual indicator that a cat is interactable.
@@ -1436,13 +1475,17 @@ export default function CatPettingGame() {
           }}
         />
 
-        {/* PET POPUP - rendered as a window over the room */}
+        {/* PET POPUP - rendered as a window over the room.
+            Cursor (Entry 28): the entire popup uses the petting-hand cursor — you're
+            in pet-the-cat mode, the pointing hand would be wrong here. The !important
+            via inline style overrides the global pointing cursor from index.html. */}
         {showPetPopup && (
           <div style={{
               position: "absolute", inset: 0,
               background: "rgba(40,30,25,0.55)",
               display: "flex", alignItems: "center", justifyContent: "center",
               zIndex: 50,
+              cursor: `url('${CURSOR_PET_URL}') ${CURSOR_PET_HOTSPOT.x} ${CURSOR_PET_HOTSPOT.y}, auto`,
             }}
           >
             <div style={{
