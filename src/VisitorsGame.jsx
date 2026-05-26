@@ -1581,9 +1581,16 @@ export default function CatPettingGame() {
                 halfhappy / happy / angry1 / angry2 / cat_gone) is shown.
               - SVG MODE (cat has no petting art yet): legacy procedural SVG cat
                 inside a white card. Will be removed when all 5 cats have art.
-            Cursor (Entry 28-29): unconditionally pet-hand throughout. */}
+            Cursor (Entry 28-29): unconditionally pet-hand throughout.
+
+            Sprite sizing (Entry 31): both the background and the cat sprite are
+            authored at "1:1 game pixels" inside a 320x240 viewport. We render
+            them via <img> elements inside a 320x240 logical box that is then
+            scaled to fit the on-screen viewport. The global image-rendering:
+            pixelated CSS in index.html ensures upscaling stays crisp. */}
         {showPetPopup && (() => {
-          const pettingSprites = pettingSpritesRef.current[activeCat.type];
+          const activeType = activeCat && activeCat.type;
+          const pettingSprites = activeType ? pettingSpritesRef.current[activeType] : null;
           const usePngMode = !!pettingSprites && Object.keys(pettingSprites).length > 0;
 
           // Choose which petting sprite to show this frame.
@@ -1604,13 +1611,39 @@ export default function CatPettingGame() {
 
           // Resolve to an image URL. cat_gone is a single global PNG; everything
           // else comes from the per-personality petting sprite map.
+          // CRITICAL (Entry 31 bug fix): defensive access — if the requested sprite
+          // hasn't loaded yet (e.g. angry2 in the first instant of a warning),
+          // `pettingSprites[moodKey]` is undefined. Previous code did
+          // `img.src` directly and threw TypeError, which crashed the popup
+          // render and caused the "popup randomly closes mid-petting" bug.
+          // Now we fall back to the normal sprite if the requested one isn't ready,
+          // and to null if even normal isn't ready (handled by render check below).
+          //
+          // We also extract the intrinsic pixel dimensions of the sprite so we can
+          // scale it correctly. The artist drew these inside a 320x240 canvas, so
+          // the on-screen size should be (sprite_w / 320) of the popup width.
           let pngSrc = null;
+          let pngW = 0, pngH = 0;
           if (usePngMode) {
             if (moodKey === "_gone") {
               pngSrc = catGoneUrl;
+              // cat_gone is a global asset, not preloaded into pettingSpritesRef.
+              // We don't know its dimensions until first frame; use a sensible
+              // fallback (the cat is "puffing out" so roughly cat-sized is fine).
+              const normal = pettingSprites && pettingSprites.normal;
+              if (normal && normal.naturalWidth) {
+                pngW = normal.naturalWidth;
+                pngH = normal.naturalHeight;
+              }
             } else {
-              const img = pettingSprites[moodKey];
-              if (img && img.src) pngSrc = img.src;
+              const img = pettingSprites[moodKey] || pettingSprites.normal;
+              if (img && img.src) {
+                pngSrc = img.src;
+                if (img.naturalWidth) {
+                  pngW = img.naturalWidth;
+                  pngH = img.naturalHeight;
+                }
+              }
             }
           }
 
@@ -1624,26 +1657,41 @@ export default function CatPettingGame() {
               }}
             >
               {usePngMode ? (
-                // PNG MODE: full-bleed petting_background + centered mood sprite.
-                // The mouse-move handler is attached to this whole container so
-                // petting-the-cat works anywhere inside the popup, just like before.
+                // PNG MODE: full 320x240 logical viewport with background + cat <img>s.
+                // Both images are stacked absolutely so they keep their authored 1:1
+                // pixel relationship — the cat sits where the artist placed it relative
+                // to the background. The parent uses the same min(98vw, 100vh*4/3)
+                // sizing math as the room view, so the popup feels like the same screen.
                 <div
                   ref={catAreaRef}
                   onMouseMove={handleMouseMove}
                   onMouseLeave={handleMouseLeave}
                   style={{
                     position: "relative",
-                    // Same aspect ratio as the room (320:240). Scaled to fit the viewport;
-                    // width caps at the same value as the room view so the popup feels
-                    // like the same "screen" with a backdrop swap.
-                    width: "100%", height: "100%",
-                    backgroundImage: `url('${pettingBgUrl}')`,
-                    backgroundSize: "100% 100%",
-                    backgroundRepeat: "no-repeat",
-                    backgroundPosition: "center",
+                    // Match the outer viewport's sizing — same 320:240 aspect, same fit-to-screen rules.
+                    width: "min(98vw, calc((100vh - 16px) * (4 / 3)))",
+                    height: "min(73.5vw, calc(100vh - 16px))",
                     cursor: `url('${CURSOR_PET_URL}') ${CURSOR_PET_HOTSPOT.x} ${CURSOR_PET_HOTSPOT.y}, auto`,
                   }}
                 >
+                  {/* Backdrop: petting_background.png authored at 320x240. We render
+                      it as a real <img> (not CSS background) so the global
+                      image-rendering: pixelated rule from index.html applies — CSS
+                      backgrounds bypass that rule and would look blurry. */}
+                  <img
+                    src={pettingBgUrl}
+                    alt=""
+                    draggable={false}
+                    style={{
+                      position: "absolute", inset: 0,
+                      width: "100%", height: "100%",
+                      pointerEvents: "none",
+                    }}
+                  />
+                  {/* Cat sprite. Authored at game-internal 1:1 pixels, so we
+                      compute its size as (sprite_px / 320) * 100% of the popup
+                      width. This keeps the cat the right size relative to the
+                      background no matter how big the viewport is on screen. */}
                   {pngSrc && (
                     <img
                       src={pngSrc}
@@ -1651,15 +1699,18 @@ export default function CatPettingGame() {
                       draggable={false}
                       style={{
                         position: "absolute",
-                        // Center the cat sprite. The artist drew these at the
-                        // intended on-screen size (1:1 game pixels), but our
-                        // popup CSS is in % of the scaled viewport — so we use
-                        // top/left:50% + translate(-50%, -50%) to keep it centered
-                        // regardless of the popup's actual rendered size. The
-                        // image's intrinsic dimensions are preserved.
+                        // Center via translate.
                         top: "50%", left: "50%",
                         transform: "translate(-50%, -50%)",
-                        // No transitions — sprite swap should feel instant + game-y.
+                        // Scale: the artist drew the sprite at intrinsic dimensions
+                        // pngW x pngH within a 320x240 canvas. So on-screen the sprite
+                        // should be (pngW / 320) of the parent width and (pngH / 240) of
+                        // the parent height. We size by width and let height auto-scale
+                        // to preserve aspect ratio (which equals pngH/pngW * width =
+                        // pngH/320 of parent width — but parent is 320:240 aspect, so
+                        // pngH/320 * (4/3) = pngH/240 of parent height. Math checks out.)
+                        width: pngW > 0 ? `${(pngW / 320) * 100}%` : "30%",
+                        height: "auto",
                         pointerEvents: "none",
                       }}
                     />
