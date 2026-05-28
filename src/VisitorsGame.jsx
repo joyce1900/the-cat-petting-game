@@ -1728,6 +1728,30 @@ export default function CatPettingGame() {
     </button>
   );
 
+  // ---- credits line (bottom-left, visible in room phase) ----
+  // A tiny, semi-transparent signature in the bottom-left of the viewport.
+  // Stays inside the viewport bounds so it scales with the game; pointer-events
+  // are off so it never interferes with clicks. Sits at zIndex below the petting
+  // popup overlay (which is zIndex 50), so it disappears naturally when a
+  // petting session is active — no extra logic needed.
+  const creditsLine = (
+    <div style={{
+      position: "absolute",
+      bottom: "1.5%",
+      left: "2%",
+      zIndex: 10,
+      fontFamily: "monospace",
+      fontSize: "min(0.55rem, 1.6vh)",
+      color: "#5D4037",
+      opacity: 0.45,
+      pointerEvents: "none",
+      letterSpacing: "0.05em",
+      whiteSpace: "nowrap",
+    }}>
+      By Jiayi Yang @sheepy1900
+    </div>
+  );
+
   // ---- room + (optional) petting popup ----
   const showPetPopup = phase === "petting" && activeCat;
 
@@ -1989,6 +2013,9 @@ export default function CatPettingGame() {
 
         {/* mute toggle */}
         {muteBtn}
+
+        {/* credits — small signature, bottom-left, hidden by the petting popup overlay */}
+        {creditsLine}
 
       </div>
     </div>
